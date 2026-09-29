@@ -1532,6 +1532,51 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data
     padding: 0 !important;
 }
 
+/* Step 3 Columns: Equal Width & Full Expansion */
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    width: 100% !important;
+    gap: 16px !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"] {
+    flex: 1 1 0% !important;
+    min-width: 0 !important;
+    width: 0 !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stColumn"] div[data-testid="stVerticalBlock"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stColumn"] div[data-testid="stElementContainer"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    flex: 1 1 auto !important;
+    display: flex !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Memastikan wrapper grafik Plotly selalu mengisi 100% lebar container kolom */
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stPlotlyChart"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) .js-plotly-plot,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) .plot-container {
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
 /* ================================================================
            TOMBOL UPLOAD FILE & FILE CARD
            ================================================================ */
@@ -2603,31 +2648,41 @@ div[data-testid="stSelectbox"] div[data-baseweb="select"]:focus-within > div {
     box-shadow: 0 0 0 1.5px rgba(56, 189, 248, 0.4), 0 0 14px rgba(56, 189, 248, 0.35) !important;
 }
 
-/* Quick Detail Action Buttons for Dual Cycle & Non Dual (Compact & Sleek) */
+/* Quick Detail Action Buttons for Dual Cycle, Non Dual, Twinlift, and Bukan Twinlift */
 div[class*="st-key-btn_quick_dual_detail"] button,
-div[class*="st-key-btn_quick_non_dual_detail"] button {
+div[class*="st-key-btn_quick_non_dual_detail"] button,
+div[class*="st-key-btn_quick_twinlift_detail"] button,
+div[class*="st-key-btn_quick_non_twinlift_detail"] button {
     width: 100% !important;
-    padding: 0.32rem 0.65rem !important;
-    min-height: 34px !important;
-    height: 34px !important;
-    font-size: 0.82rem !important;
+    padding: 0.35rem 0.5rem !important;
+    min-height: 36px !important;
+    height: 36px !important;
     border-radius: 9px !important;
-    font-weight: 500 !important;
+    font-size: 0.80rem !important;
+    font-weight: 600 !important;
+    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif !important;
     letter-spacing: 0.15px !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
+    white-space: nowrap !important;
 }
 
-div[class*="st-key-btn_quick_dual_detail"] button p,
-div[class*="st-key-btn_quick_non_dual_detail"] button p {
-    font-size: 0.82rem !important;
+div[class*="st-key-btn_quick_dual_detail"] button *,
+div[class*="st-key-btn_quick_non_dual_detail"] button *,
+div[class*="st-key-btn_quick_twinlift_detail"] button *,
+div[class*="st-key-btn_quick_non_twinlift_detail"] button * {
+    font-size: 0.80rem !important;
+    font-weight: 600 !important;
+    font-family: 'Plus Jakarta Sans', -apple-system, sans-serif !important;
     margin: 0 !important;
     padding: 0 !important;
     line-height: 1.2 !important;
+    white-space: nowrap !important;
 }
 
-div[class*="st-key-btn_quick_dual_detail"] button {
+div[class*="st-key-btn_quick_dual_detail"] button,
+div[class*="st-key-btn_quick_twinlift_detail"] button {
     background: linear-gradient(135deg, rgba(2, 132, 199, 0.2) 0%, rgba(15, 23, 42, 0.75) 100%) !important;
     border: 1.2px solid rgba(2, 132, 199, 0.6) !important;
     color: #e0f2fe !important;
@@ -2635,7 +2690,8 @@ div[class*="st-key-btn_quick_dual_detail"] button {
     transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
-div[class*="st-key-btn_quick_dual_detail"] button:hover {
+div[class*="st-key-btn_quick_dual_detail"] button:hover,
+div[class*="st-key-btn_quick_twinlift_detail"] button:hover {
     background: linear-gradient(135deg, rgba(2, 132, 199, 0.35) 0%, rgba(15, 23, 42, 0.85) 100%) !important;
     border-color: #38bdf8 !important;
     box-shadow: 0 0 14px rgba(56, 189, 248, 0.4) !important;
@@ -2643,7 +2699,8 @@ div[class*="st-key-btn_quick_dual_detail"] button:hover {
     color: #ffffff !important;
 }
 
-div[class*="st-key-btn_quick_non_dual_detail"] button {
+div[class*="st-key-btn_quick_non_dual_detail"] button,
+div[class*="st-key-btn_quick_non_twinlift_detail"] button {
     background: linear-gradient(135deg, rgba(148, 163, 184, 0.15) 0%, rgba(15, 23, 42, 0.75) 100%) !important;
     border: 1.2px solid rgba(148, 163, 184, 0.5) !important;
     color: #f1f5f9 !important;
@@ -2651,7 +2708,8 @@ div[class*="st-key-btn_quick_non_dual_detail"] button {
     transition: all 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
 }
 
-div[class*="st-key-btn_quick_non_dual_detail"] button:hover {
+div[class*="st-key-btn_quick_non_dual_detail"] button:hover,
+div[class*="st-key-btn_quick_non_twinlift_detail"] button:hover {
     background: linear-gradient(135deg, rgba(148, 163, 184, 0.28) 0%, rgba(15, 23, 42, 0.85) 100%) !important;
     border-color: #cbd5e1 !important;
     box-shadow: 0 0 14px rgba(148, 163, 184, 0.3) !important;
@@ -2738,4 +2796,4 @@ div[data-baseweb="popover"] [data-baseweb="calendar"] [role="gridcell"]:not([ari
     background-color: rgba(37, 99, 235, 0.45) !important;
     color: #ffffff !important;
     border-radius: 6px !important;
-}
+}

@@ -597,11 +597,13 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
     if mode_kolom == "Rincian Operasional":
         filtered_df = filtered_df.drop(columns=["Format Rincian"])
     elif mode_kolom == "Format Ringkas":
-        filtered_df = filtered_df[["Truk", "Format Rincian", "Urutan", "Gap (Menit)", "Jenis"]]
+        filtered_df = filtered_df[["Truk", "Format Rincian", "Urutan", "Gap (Menit)"]]
+
+    display_df = filtered_df.drop(columns=["Jenis"], errors="ignore")
 
     # Dataframe Interaktif dengan Column Config Lengkap
     st.dataframe(
-        filtered_df,
+        display_df,
         use_container_width=True,
         hide_index=True,
         height=450,
@@ -620,7 +622,6 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
             "Waktu LOAD": st.column_config.TextColumn("Waktu LOAD", width="small"),
             "Tipe LOAD": st.column_config.TextColumn("Tipe LOAD", width="small"),
             "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
-            "Jenis": st.column_config.TextColumn("Jenis", width="small"),
         },
     )
 
@@ -692,11 +693,13 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
     if mode_kolom_non == "Rincian Operasional":
         filtered_df = filtered_df.drop(columns=["Format Rincian"])
     elif mode_kolom_non == "Format Ringkas":
-        filtered_df = filtered_df[["Truk", "Format Rincian", "Aktivitas", "Durasi (Menit)", "Status"]]
+        filtered_df = filtered_df[["Truk", "Format Rincian", "Aktivitas", "Durasi (Menit)"]]
+
+    display_df = filtered_df.drop(columns=["Status", "Jenis"], errors="ignore")
 
     # Dataframe Interaktif
     st.dataframe(
-        filtered_df,
+        display_df,
         use_container_width=True,
         hide_index=True,
         height=450,
@@ -711,7 +714,6 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
             "Waktu Selesai": st.column_config.TextColumn("Waktu Selesai", width="small"),
             "Durasi (Menit)": st.column_config.NumberColumn("Durasi (Mnt)", format="%.1f mnt", width="small"),
             "Tipe Kontainer": st.column_config.TextColumn("Tipe Kontainer", width="small"),
-            "Status": st.column_config.TextColumn("Status", width="small"),
         },
     )
 
@@ -731,4 +733,317 @@ def show_activity_detail_dialog(status: str, events: pd.DataFrame, out_df: pd.Da
         _show_non_dual_dialog(events, out_df, summary)
 
 
+def prepare_twinlift_table(out_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Menyusun tabel rincian operasional Twinlift (basis kontainer 20ft).
+    Menyajikan informasi truk, kapal, crane (QC), waktu dermaga (DISC_LOAD_TS),
+    waktu lapangan (STACK_UNSTACK_TS), gap waktu, serta status Twinlift.
+    """
+    if out_df is None or len(out_df) == 0:
+        return pd.DataFrame()
+
+    # Filter basis kontainer 20ft (satu-satunya ukuran yang eligible Twinlift)
+    df20 = out_df[out_df["CTR_SIZE"] == 20].copy()
+    if len(df20) == 0:
+        return pd.DataFrame()
+
+    df20["TS_G"] = pd.to_datetime(df20["TS_G"])
+    df20["TS_H"] = pd.to_datetime(df20["TS_H"])
+
+    truk_id = df20["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
+    ves_id = df20["VES_ID"].fillna("-").astype(str)
+    crane_id = df20["CRANE_ID"].fillna("-").astype(str)
+    activity = df20["ACTIVITY"].fillna("-").astype(str)
+    status_twin = df20["TWINLIFT_STATUS"].fillna("Bukan Twinlift").astype(str)
+    container_status = df20["CONTAINER_STATUS"].fillna("Single").astype(str)
+
+    # Gap menit dibulatkan 2 desimal
+    gap_val = df20["TWINLIFT_GAP_MENIT"].fillna(0.0).round(2)
+
+    waktu_dermaga = df20["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S")
+    waktu_lapangan = df20["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S")
+
+    ringkasan = (
+        truk_id
+        + " | "
+        + activity
+        + " ("
+        + ves_id
+        + ", "
+        + crane_id
+        + ") | Gap: "
+        + gap_val.astype(str)
+        + " mnt | "
+        + status_twin
+    )
+
+    df20["_SORT_TS"] = df20["TS_G"]
+    df20["_TRUK"] = truk_id
+    df20["_RINGKASAN"] = ringkasan
+    df20["_VES"] = ves_id
+    df20["_CRANE"] = crane_id
+    df20["_ACT"] = activity
+    df20["_WAKTU_DERMAGA"] = waktu_dermaga
+    df20["_WAKTU_LAPANGAN"] = waktu_lapangan
+    df20["_GAP"] = gap_val
+    df20["_STATUS_TWIN"] = status_twin
+    df20["_CONTAINER_STATUS"] = container_status
+
+    df20 = df20.sort_values(by=["_SORT_TS", "EVENT_ID", "_TRUK"]).reset_index(drop=True)
+
+    res = pd.DataFrame(
+        {
+            "Truk": df20["_TRUK"],
+            "Format Rincian": df20["_RINGKASAN"],
+            "Event ID": df20["EVENT_ID"],
+            "Aktivitas": df20["_ACT"],
+            "Kapal": df20["_VES"],
+            "Crane": df20["_CRANE"],
+            "Waktu Dermaga": df20["_WAKTU_DERMAGA"],
+            "Waktu Lapangan": df20["_WAKTU_LAPANGAN"],
+            "Gap Twinlift": df20["_GAP"],
+            "Status Twinlift": df20["_STATUS_TWIN"],
+            "Tipe Muatan": df20["_CONTAINER_STATUS"],
+        }
+    )
+    return res
+
+
+@st.dialog("Rincian Aktivitas Twinlift (Kontainer 20ft)", width="large")
+def _show_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up interaktif rincian operasional Twinlift
+    saat tombol 'Rincian Twinlift' di bawah donut chart diklik.
+    """
+    df_data = prepare_twinlift_table(out_df)
+    if len(df_data) == 0:
+        st.info("Tidak ada data kontainer 20ft yang ditemukan pada dataset ini.")
+        if st.button("Tutup", key="btn_close_empty_twin", type="secondary"):
+            st.rerun()
+        return
+
+    # Mini KPI Summary Row
+    total_20ft = len(df_data)
+    twin_mask = df_data["Status Twinlift"] == "Twinlift"
+    total_twinlift = int(twin_mask.sum())
+    pct_twinlift = (total_twinlift / total_20ft * 100) if total_20ft > 0 else 0
+    total_pasangan = total_twinlift // 2
+
+    df_twin = df_data[twin_mask]
+    truk_terlibat = df_twin["Truk"].nunique() if total_twinlift > 0 else 0
+    crane_terlibat = df_twin["Crane"].nunique() if total_twinlift > 0 else 0
+    avg_gap_twin = df_twin["Gap Twinlift"].mean() if total_twinlift > 0 else 0.0
+
+    ambang_tw_label = f"Ambang batas: ≤ {summary.get('ambang_twinlift', 5):.0f} mnt" if summary and "ambang_twinlift" in summary else "Toleransi lifting"
+
+    mk1, mk2, mk3, mk4 = st.columns(4)
+    with mk1:
+        st.metric("Total Twinlift", f"{format_number(total_twinlift)} Ctr", f"{total_pasangan:,} pasang lift")
+    with mk2:
+        st.metric("% Twinlift (20ft)", f"{pct_twinlift:.1f}%", f"dari {format_number(total_20ft)} Ctr 20ft")
+    with mk3:
+        st.metric("Truk & Crane", f"{format_number(truk_terlibat)} Truk", f"{crane_terlibat} Crane (QC)")
+    with mk4:
+        st.metric("Rata-rata Gap", f"{avg_gap_twin:.2f} mnt", ambang_tw_label)
+
+    # Filter Pencarian & Kategori
+    fc1, fc2, fc3, fc4 = st.columns([1.8, 1.1, 1.1, 1.1])
+    with fc1:
+        search_txt = st.text_input(
+            "🔍 Cari Truk / Kapal / Crane / Event:",
+            placeholder="Ketik ID Truk / Kapal / Crane...",
+            key="filter_twin_search",
+        ).strip().lower()
+    with fc2:
+        status_filter = st.selectbox(
+            "Status Operasi:",
+            ["Hanya Twinlift", "Semua Kontainer 20ft", "Hanya Bukan Twinlift"],
+            key="filter_twin_status_sel",
+        )
+    with fc3:
+        act_filter = st.selectbox(
+            "Filter Aktivitas:",
+            ["Semua Aktivitas", "Hanya DISC (Bongkar)", "Hanya LOAD (Muat)"],
+            key="filter_twin_act_sel",
+        )
+    with fc4:
+        mode_kolom = st.selectbox(
+            "Tampilan Kolom:",
+            ["Semua Kolom", "Rincian Operasional", "Format Ringkas"],
+            key="filter_twin_mode_kolom",
+        )
+
+    # Terapkan Filtering
+    filtered_df = df_data.copy()
+    if search_txt:
+        mask = (
+            filtered_df["Truk"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Kapal"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Crane"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Event ID"].astype(str).str.contains(search_txt, na=False)
+            | filtered_df["Format Rincian"].str.lower().str.contains(search_txt, na=False)
+        )
+        filtered_df = filtered_df[mask]
+
+    if status_filter == "Hanya Twinlift":
+        filtered_df = filtered_df[filtered_df["Status Twinlift"] == "Twinlift"]
+    elif status_filter == "Hanya Bukan Twinlift":
+        filtered_df = filtered_df[filtered_df["Status Twinlift"] == "Bukan Twinlift"]
+
+    if act_filter == "Hanya DISC (Bongkar)":
+        filtered_df = filtered_df[filtered_df["Aktivitas"] == "DISC"]
+    elif act_filter == "Hanya LOAD (Muat)":
+        filtered_df = filtered_df[filtered_df["Aktivitas"] == "LOAD"]
+
+    if mode_kolom == "Rincian Operasional":
+        filtered_df = filtered_df.drop(columns=["Format Rincian"])
+    elif mode_kolom == "Format Ringkas":
+        filtered_df = filtered_df[["Truk", "Format Rincian", "Aktivitas", "Gap Twinlift", "Status Twinlift"]]
+
+    # Dataframe Interaktif dengan Column Config Lengkap
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        hide_index=True,
+        height=450,
+        column_config={
+            "Truk": st.column_config.TextColumn("No Truk", width="small"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="medium"),
+            "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
+            "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+            "Kapal": st.column_config.TextColumn("Kapal", width="small"),
+            "Crane": st.column_config.TextColumn("Crane", width="small"),
+            "Waktu Dermaga": st.column_config.TextColumn("Waktu Dermaga", width="small"),
+            "Waktu Lapangan": st.column_config.TextColumn("Waktu Lapangan", width="small"),
+            "Gap Twinlift": st.column_config.NumberColumn("Gap (Mnt)", format="%.2f mnt", width="small"),
+            "Status Twinlift": st.column_config.TextColumn("Status", width="small"),
+            "Tipe Muatan": st.column_config.TextColumn("Muatan Truk", width="small"),
+        },
+    )
+
+    st.caption(f"Menampilkan **{len(filtered_df):,}** dari total **{len(df_data):,}** data kontainer 20ft.")
+
+
+@st.dialog("Rincian Aktivitas Bukan Twinlift (Kontainer 20ft)", width="large")
+def _show_non_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up interaktif rincian operasional Bukan Twinlift (Single Lift 20ft)
+    saat tombol 'Rincian Bukan Twinlift' di bawah donut chart diklik.
+    """
+    df_data = prepare_twinlift_table(out_df)
+    if len(df_data) == 0:
+        st.info("Tidak ada data kontainer 20ft yang ditemukan pada dataset ini.")
+        if st.button("Tutup", key="btn_close_empty_nontwin", type="secondary"):
+            st.rerun()
+        return
+
+    # Mini KPI Summary Row
+    total_20ft = len(df_data)
+    non_twin_mask = df_data["Status Twinlift"] == "Bukan Twinlift"
+    total_non_twin = int(non_twin_mask.sum())
+    pct_non_twin = (total_non_twin / total_20ft * 100) if total_20ft > 0 else 0
+
+    df_non = df_data[non_twin_mask]
+    truk_terlibat = df_non["Truk"].nunique() if total_non_twin > 0 else 0
+    crane_terlibat = df_non["Crane"].nunique() if total_non_twin > 0 else 0
+    disc_count = int((df_non["Aktivitas"] == "DISC").sum())
+    load_count = int((df_non["Aktivitas"] == "LOAD").sum())
+
+    mk1, mk2, mk3, mk4 = st.columns(4)
+    with mk1:
+        st.metric("Total Bukan Twinlift", f"{format_number(total_non_twin)} Ctr", "Single lift 20ft")
+    with mk2:
+        st.metric("% Bukan Twinlift", f"{pct_non_twin:.1f}%", f"dari {format_number(total_20ft)} Ctr 20ft")
+    with mk3:
+        st.metric("Truk & Crane", f"{format_number(truk_terlibat)} Truk", f"{crane_terlibat} Crane (QC)")
+    with mk4:
+        st.metric("Aktivitas Operasi", f"{format_number(disc_count)} DISC", f"{load_count} LOAD")
+
+    # Filter Pencarian & Kategori
+    fc1, fc2, fc3, fc4 = st.columns([1.8, 1.1, 1.1, 1.1])
+    with fc1:
+        search_txt = st.text_input(
+            "🔍 Cari Truk / Kapal / Crane / Event:",
+            placeholder="Ketik ID Truk / Kapal / Crane...",
+            key="filter_nontwin_search",
+        ).strip().lower()
+    with fc2:
+        status_filter = st.selectbox(
+            "Status Operasi:",
+            ["Hanya Bukan Twinlift", "Semua Kontainer 20ft", "Hanya Twinlift"],
+            key="filter_nontwin_status_sel",
+        )
+    with fc3:
+        act_filter = st.selectbox(
+            "Filter Aktivitas:",
+            ["Semua Aktivitas", "Hanya DISC (Bongkar)", "Hanya LOAD (Muat)"],
+            key="filter_nontwin_act_sel",
+        )
+    with fc4:
+        mode_kolom = st.selectbox(
+            "Tampilan Kolom:",
+            ["Semua Kolom", "Rincian Operasional", "Format Ringkas"],
+            key="filter_nontwin_mode_kolom",
+        )
+
+    # Terapkan Filtering
+    filtered_df = df_data.copy()
+    if search_txt:
+        mask = (
+            filtered_df["Truk"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Kapal"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Crane"].str.lower().str.contains(search_txt, na=False)
+            | filtered_df["Event ID"].astype(str).str.contains(search_txt, na=False)
+            | filtered_df["Format Rincian"].str.lower().str.contains(search_txt, na=False)
+        )
+        filtered_df = filtered_df[mask]
+
+    if status_filter == "Hanya Bukan Twinlift":
+        filtered_df = filtered_df[filtered_df["Status Twinlift"] == "Bukan Twinlift"]
+    elif status_filter == "Hanya Twinlift":
+        filtered_df = filtered_df[filtered_df["Status Twinlift"] == "Twinlift"]
+
+    if act_filter == "Hanya DISC (Bongkar)":
+        filtered_df = filtered_df[filtered_df["Aktivitas"] == "DISC"]
+    elif act_filter == "Hanya LOAD (Muat)":
+        filtered_df = filtered_df[filtered_df["Aktivitas"] == "LOAD"]
+
+    if mode_kolom == "Rincian Operasional":
+        filtered_df = filtered_df.drop(columns=["Format Rincian"])
+    elif mode_kolom == "Format Ringkas":
+        filtered_df = filtered_df[["Truk", "Format Rincian", "Aktivitas", "Gap Twinlift", "Status Twinlift"]]
+
+    # Dataframe Interaktif dengan Column Config Lengkap
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        hide_index=True,
+        height=450,
+        column_config={
+            "Truk": st.column_config.TextColumn("No Truk", width="small"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="medium"),
+            "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
+            "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+            "Kapal": st.column_config.TextColumn("Kapal", width="small"),
+            "Crane": st.column_config.TextColumn("Crane", width="small"),
+            "Waktu Dermaga": st.column_config.TextColumn("Waktu Dermaga", width="small"),
+            "Waktu Lapangan": st.column_config.TextColumn("Waktu Lapangan", width="small"),
+            "Gap Twinlift": st.column_config.NumberColumn("Gap (Mnt)", format="%.2f mnt", width="small"),
+            "Status Twinlift": st.column_config.TextColumn("Status", width="small"),
+            "Tipe Muatan": st.column_config.TextColumn("Muatan Truk", width="small"),
+        },
+    )
+
+    st.caption(f"Menampilkan **{len(filtered_df):,}** dari total **{len(df_data):,}** data kontainer 20ft.")
+
+
+def show_twinlift_detail_dialog(status: str, out_df: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up interaktif rincian operasional Twinlift atau Bukan Twinlift
+    saat tombol 'Rincian Twinlift' atau 'Rincian Bukan Twinlift' diklik di bawah chart donut.
+    """
+    if status == "Twinlift":
+        _show_twinlift_dialog(out_df, summary)
+    else:
+        _show_non_twinlift_dialog(out_df, summary)
 

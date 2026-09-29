@@ -1,5 +1,5 @@
 """
-CACA - Cycle Analyst & Cargo Accelaration Dashboard
+CACA - Cycle Analysis & Cargo Accelaration Dashboard
 Pelindo Terminal Teluk Lamong
 
 Aplikasi analitis berbasis web untuk rekonstruksi siklus truk dermaga,
@@ -45,6 +45,7 @@ from modules.ui import (
     render_kpi_card,
     render_template,
     show_activity_detail_dialog,
+    show_twinlift_detail_dialog,
 )
 
 
@@ -268,11 +269,11 @@ with st.container(border=True):
                     r_start, r_end = r_end, r_start
                 is_full_range = (r_start == step2_min_d and r_end == step2_max_d)
                 if is_full_range:
-                    lbl = f"Seluruh Data Excel ({step2_min_d.strftime('%d/%m/%Y')} - {step2_max_d.strftime('%d/%m/%Y')})"
+                    lbl = f"({step2_min_d.strftime('%d/%m/%Y')}) - ({step2_max_d.strftime('%d/%m/%Y')})"
                     rng = None
                 else:
                     n_days = (r_end - r_start).days + 1
-                    lbl = f"{r_start.strftime('%d/%m/%Y')} s.d. {r_end.strftime('%d/%m/%Y')} ({n_days} Hari)"
+                    lbl = f"({r_start.strftime('%d/%m/%Y')}) - ({r_end.strftime('%d/%m/%Y')}) ({n_days} Hari)"
                     rng = (r_start, r_end)
 
                 st.session_state["_init_period_range"] = rng
@@ -281,11 +282,11 @@ with st.container(border=True):
                 # Pemilihan sedang berlangsung (baru memilih 1 tanggal)
                 r_single = step2_date_val[0]
                 st.session_state["_init_period_range"] = (r_single, r_single)
-                st.session_state["_init_period_label"] = f"{r_single.strftime('%d/%m/%Y')} (1 Hari)"
+                st.session_state["_init_period_label"] = f"({r_single.strftime('%d/%m/%Y')}) (1 Hari)"
         else:
             r_single = step2_date_val
             st.session_state["_init_period_range"] = (r_single, r_single)
-            st.session_state["_init_period_label"] = f"{r_single.strftime('%d/%m/%Y')} (1 Hari)"
+            st.session_state["_init_period_label"] = f"({r_single.strftime('%d/%m/%Y')}) (1 Hari)"
 
     # Pemilihan Sheet Data Operasional (di bawah filter rentang tanggal)
     sheet_name = st.selectbox(
@@ -496,7 +497,15 @@ summary = hasil["summary"]
 # LANGKAH 3: EXECUTIVE KPI & HASIL ANALISIS
 # ================================================================
 with st.container(border=True):
-    period_lbl = hasil.get("period_label", st.session_state.get("_init_period_label", "Seluruh Data Excel"))
+    # Sinkronisasi label periode secara dinamis jika rentang tanggal sesuai dengan hasil komputasi
+    curr_label = st.session_state.get("_init_period_label")
+    curr_rng = st.session_state.get("_init_period_range")
+    if curr_label and hasil.get("period_range") == curr_rng:
+        hasil["period_label"] = curr_label
+        if "hasil" in session_store:
+            session_store["hasil"]["period_label"] = curr_label
+
+    period_lbl = hasil.get("period_label", curr_label or "Seluruh Data Excel")
     render_template("step3_header.html", period_label=period_lbl)
 
     # Smooth scroll otomatis menggeser halaman ke Langkah 3 saat komputasi selesai dijalankan
@@ -533,9 +542,9 @@ with st.container(border=True):
     # Twinlift, karena keduanya secara definisi cuma mungkin terjadi di 20ft.
     monthly_20ft = summary["monthly_20ft"].reset_index().rename(columns={"BULAN": "Bulan"})
 
-    # 4 Tab Hasil Analisis
-    tab_dual, tab_twinlift, tab_vessel, tab_download = st.tabs(
-        ["Dual Cycle", "Twinlift", "Per Vessel", "Download Hasil Analisis"]
+    # 3 Tab Hasil Analisis
+    tab_dual, tab_twinlift, tab_download = st.tabs(
+        ["Dual Cycle", "Twinlift", "Download Hasil Analisis"]
     )
 
     # ----------------------------------------------------------------
@@ -567,16 +576,26 @@ with st.container(border=True):
                 insidetextorientation="horizontal",
                 textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                 marker=dict(line=dict(color="#ffffff", width=2)),
-                domain=dict(x=[0, 0.82], y=[0, 1]),
                 hovertemplate="<b>%{label}</b><br>Jumlah: %{value:,} event (%{percent})<extra></extra>",
             )
             apply_glass_theme(fig_pie)
-            fig_pie.update_layout(height=380, margin=dict(t=60, b=20, l=20, r=20))
+            fig_pie.update_layout(
+                height=380,
+                margin=dict(t=60, b=20, l=20, r=20),
+                legend=dict(
+                    orientation="v",
+                    yanchor="middle",
+                    y=0.5,
+                    xanchor="left",
+                    x=1.02,
+                ),
+            )
 
             # Render chart donut
             st.plotly_chart(
                 fig_pie,
-                width="stretch",
+                use_container_width=True,
+                key="donut_dual_cycle_chart",
             )
 
             # Tombol aksi langsung untuk membuka rincian modal
@@ -624,11 +643,20 @@ with st.container(border=True):
                     insidetextorientation="horizontal",
                     textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                     marker=dict(line=dict(color="#ffffff", width=2)),
-                    domain=dict(x=[0, 0.82], y=[0, 1]),
                 )
                 apply_glass_theme(fig_combo20)
-                fig_combo20.update_layout(height=380, margin=dict(t=60, b=20, l=20, r=20))
-                st.plotly_chart(fig_combo20, width="stretch")
+                fig_combo20.update_layout(
+                    height=380,
+                    margin=dict(t=60, b=20, l=20, r=20),
+                    legend=dict(
+                        orientation="v",
+                        yanchor="middle",
+                        y=0.5,
+                        xanchor="left",
+                        x=1.02,
+                    ),
+                )
+                st.plotly_chart(fig_combo20, use_container_width=True, key="donut_combo_single_chart")
             else:
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
@@ -689,14 +717,12 @@ with st.container(border=True):
             st.info("Tidak ada kontainer 20ft pada data ini untuk breakdown bulanan Combo/Single.")
 
         # --------------------------------------------------------
-        # Breakdown Dual Cycle: Per Shift & Per Hari
+        # Breakdown Dual Cycle: Per Shift
         # --------------------------------------------------------
         render_html('<div style="height:8px;"></div>')
-        st.markdown("##### Breakdown Dual Cycle per Shift & per Hari")
+        st.markdown("##### Breakdown Dual Cycle per Shift")
 
         shift_df = summary["shift"]
-        daily_df = summary["daily"]
-        day_shift_df = summary["day_shift"]
 
         # --- Chart 1: Dual vs Non Dual per Shift (jumlah + persentase) ---
         if len(shift_df) > 0:
@@ -734,83 +760,10 @@ with st.container(border=True):
         else:
             st.info("Tidak ada data shift pada hasil analisis ini.")
 
-        # --- Chart 2 & 3: Detail Harian, difilter per bulan supaya tetap terbaca ---
-        if len(daily_df) > 0 and len(day_shift_df) > 0:
-            daily_df = daily_df.copy()
-            daily_df["BULAN"] = daily_df["TANGGAL"].str[:7]
-            bulan_opsi = sorted(daily_df["BULAN"].unique().tolist())
-
-            bulan_terpilih = st.selectbox(
-                "Pilih Bulan untuk Detail Harian x Shift",
-                bulan_opsi,
-                index=len(bulan_opsi) - 1,
-                key="bulan_detail_dual_cycle",
-            )
-
-            daily_filt = daily_df[daily_df["BULAN"] == bulan_terpilih]
-            day_shift_filt = day_shift_df[day_shift_df["TANGGAL"].str[:7] == bulan_terpilih].copy()
-
-            fig_daily = px.line(
-                daily_filt,
-                x="TANGGAL",
-                y="pct_dual",
-                title=f"Tren % Dual Cycle Harian — {bulan_terpilih}",
-                markers=True,
-            )
-            fig_daily.update_traces(line_color="#0284C7")
-            fig_daily.update_layout(
-                yaxis=dict(title="% Dual Cycle", tickformat=".0%", range=[0, 1]),
-                xaxis=dict(title="Tanggal"),
-            )
-            apply_glass_theme(fig_daily)
-            st.plotly_chart(fig_daily, width="stretch")
-
-            if len(day_shift_filt) > 0:
-                # GANTI HEATMAP -> line chart 3 shift (jauh lebih enak dibaca
-                # untuk melihat tren tiap shift dari hari ke hari).
-                shift_order = [
-                    "Shift 1 (00.00-08.00)",
-                    "Shift 2 (08.00-16.00)",
-                    "Shift 3 (16.00-00.00)",
-                ]
-                day_shift_filt["SHIFT"] = pd.Categorical(
-                    day_shift_filt["SHIFT"], categories=shift_order, ordered=True
-                )
-                day_shift_filt = day_shift_filt.sort_values(["TANGGAL", "SHIFT"])
-
-                fig_shift_trend = px.line(
-                    day_shift_filt,
-                    x="TANGGAL",
-                    y="pct_dual",
-                    color="SHIFT",
-                    markers=True,
-                    title=f"Tren % Dual Cycle per Shift — {bulan_terpilih}",
-                    color_discrete_map={
-                        "Shift 1 (00.00-08.00)": "#38BDF8",
-                        "Shift 2 (08.00-16.00)": "#22C55E",
-                        "Shift 3 (16.00-00.00)": "#F59E0B",
-                    },
-                    category_orders={"SHIFT": shift_order},
-                )
-                fig_shift_trend.update_traces(line=dict(width=2.5), marker=dict(size=7))
-                fig_shift_trend.update_layout(
-                    yaxis=dict(title="% Dual Cycle", tickformat=".0%", range=[0, 1]),
-                    xaxis=dict(title="Tanggal"),
-                )
-                apply_glass_theme(fig_shift_trend)
-                fig_shift_trend.update_xaxes(tickangle=-45)
-                st.plotly_chart(fig_shift_trend, width="stretch")
-            else:
-                st.info("Tidak ada data pada bulan yang dipilih.")
-        else:
-            st.info("Tidak ada data harian pada hasil analisis ini.")
-
     # ----------------------------------------------------------------
     # TAB 2: TWINLIFT
     # ----------------------------------------------------------------
     with tab_twinlift:
-        render_template("tab_twinlift_info.html", ambang_twinlift=hasil["ambang_twinlift"])
-
         # FIX LOGIKA: info "Total Event"/ritase dihapus dari tab ini karena
         # tidak ada hubungannya dengan Twinlift (Twinlift adalah properti
         # per-kontainer, bukan per-ritase truk). Yang relevan cukup: jumlah
@@ -889,11 +842,34 @@ with st.container(border=True):
                     insidetextorientation="horizontal",
                     textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                     marker=dict(line=dict(color="#ffffff", width=2)),
-                    domain=dict(x=[0, 0.82], y=[0, 1]),
                 )
                 apply_glass_theme(fig_twin_pie)
-                fig_twin_pie.update_layout(height=380, margin=dict(t=60, b=20, l=20, r=20))
-                st.plotly_chart(fig_twin_pie, width="stretch")
+                fig_twin_pie.update_layout(
+                    height=380,
+                    margin=dict(t=60, b=20, l=20, r=20),
+                    legend=dict(
+                        orientation="v",
+                        yanchor="middle",
+                        y=0.5,
+                        xanchor="left",
+                        x=1.02,
+                    ),
+                )
+                st.plotly_chart(fig_twin_pie, use_container_width=True, key="donut_twinlift_chart")
+
+                # Tombol aksi langsung untuk membuka rincian modal Twinlift & Bukan Twinlift
+                col_tw1, col_tw2 = st.columns(2)
+                with col_tw1:
+                    if st.button("🔍 Rincian Twinlift", use_container_width=True, key="btn_quick_twinlift_detail"):
+                        st.session_state["modal_twinlift_status"] = "Twinlift"
+                        st.session_state["show_twinlift_modal"] = True
+                        st.rerun()
+
+                with col_tw2:
+                    if st.button("🔍 Rincian Bukan Twinlift", use_container_width=True, key="btn_quick_non_twinlift_detail"):
+                        st.session_state["modal_twinlift_status"] = "Bukan Twinlift"
+                        st.session_state["show_twinlift_modal"] = True
+                        st.rerun()
             else:
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
@@ -926,19 +902,27 @@ with st.container(border=True):
             else:
                 st.info("Tidak ada kontainer 20ft pada data ini untuk breakdown bulanan.")
 
+        # Tampilkan Pop-up Dialog Modal jika dipicu
+        if st.session_state.get("show_twinlift_modal") and st.session_state.get("modal_twinlift_status"):
+            status_twin_to_open = st.session_state["modal_twinlift_status"]
+            st.session_state["show_twinlift_modal"] = False
+            show_twinlift_detail_dialog(status_twin_to_open, out_df, summary)
+
         # --------------------------------------------------------
         # Performa Crane (QC) dalam Twinlift — basis 20ft
         # --------------------------------------------------------
         render_html('<div style="height:8px;"></div>')
-        st.markdown("##### Performa Crane (QC) dalam Twinlift")
-        render_html(
-            '<div style="font-size:0.8rem;color:#94a3b8;margin-top:-6px;margin-bottom:10px;line-height:1.4;">'
-            'Syarat Twinlift: 2 kontainer 20ft dari kapal yang sama, diangkut truk yang sama, '
-            'DAN diangkat oleh Crane yang sama pada kegiatan di dermaga (bongkar DISC maupun '
-            'muat LOAD), dalam ambang waktu yang ditentukan. Twinlift hanya bisa dilakukan crane '
-            'kade internasional (ID berakhiran I); crane kade domestik (berakhiran D) selalu 0%. Persentase '
-            'di bawah dihitung dari kontainer 20ft yang ditangani tiap crane, bukan dari seluruh '
-            'kontainer yang ditangani crane tersebut.</div>'
+        st.markdown(
+            "##### Performa Crane (QC) dalam Twinlift",
+            help=(
+                "**Syarat Twinlift:** 2 kontainer 20ft dari kapal yang sama, diangkut truk yang sama, "
+                "DAN diangkat oleh Crane yang sama pada kegiatan di dermaga (bongkar DISC maupun "
+                "muat LOAD), dalam ambang waktu yang ditentukan.\n\n"
+                "Twinlift hanya bisa dilakukan crane kade internasional (ID berakhiran I); "
+                "crane kade domestik (berakhiran D) selalu 0%.\n\n"
+                "Persentase di bawah dihitung dari kontainer 20ft yang ditangani tiap crane, "
+                "bukan dari seluruh kontainer yang ditangani crane tersebut."
+            ),
         )
 
         crane_perf = summary["crane_performa"]
@@ -965,38 +949,24 @@ with st.container(border=True):
                 )
                 crane_chart_df["% Twinlift"] = (crane_chart_df["pct_twinlift_dari_20ft"] * 100).round(1)
 
-                cr1, cr2 = st.columns([1.3, 1])
-                with cr1:
-                    fig_crane = px.bar(
-                        crane_chart_df.sort_values("pct_twinlift_dari_20ft"),
-                        x="pct_twinlift_dari_20ft",
-                        y="CRANE_ID",
-                        orientation="h",
-                        title=f"Top {top_n} Crane Berdasarkan % Twinlift (dari 20ft)",
-                        text="% Twinlift",
-                        color="pct_twinlift_dari_20ft",
-                        color_continuous_scale=["#94A3B8", "#0284C7"],
-                    )
-                    fig_crane.update_traces(texttemplate="%{text}%", textposition="outside", cliponaxis=False)
-                    fig_crane.update_layout(
-                        xaxis=dict(title="% Twinlift (dari 20ft)", tickformat=".0%", range=[0, 1.12]),
-                        yaxis=dict(title=""),
-                        coloraxis_showscale=False,
-                    )
-                    apply_glass_theme(fig_crane)
-                    st.plotly_chart(fig_crane, width="stretch")
-
-                with cr2:
-                    best_crane = crane_chart_df.sort_values("pct_twinlift_dari_20ft", ascending=False).iloc[0]
-                    render_kpi_card(
-                        "Crane Terbaik (Twinlift)",
-                        str(best_crane["CRANE_ID"]),
-                        subtext=(
-                            f"{best_crane['pct_twinlift_dari_20ft'] * 100:.1f}% dari "
-                            f"{format_number(best_crane['total_20ft'])} kontainer 20ft"
-                        ),
-                        variant="emerald",
-                    )
+                fig_crane = px.bar(
+                    crane_chart_df.sort_values("pct_twinlift_dari_20ft"),
+                    x="pct_twinlift_dari_20ft",
+                    y="CRANE_ID",
+                    orientation="h",
+                    title=f"Top {top_n} Crane Berdasarkan % Twinlift (dari 20ft)",
+                    text="% Twinlift",
+                    color="pct_twinlift_dari_20ft",
+                    color_continuous_scale=["#94A3B8", "#0284C7"],
+                )
+                fig_crane.update_traces(texttemplate="%{text}%", textposition="outside", cliponaxis=False)
+                fig_crane.update_layout(
+                    xaxis=dict(title="% Twinlift (dari 20ft)", tickformat=".0%", range=[0, 1.12]),
+                    yaxis=dict(title=""),
+                    coloraxis_showscale=False,
+                )
+                apply_glass_theme(fig_crane)
+                st.plotly_chart(fig_crane, width="stretch")
 
                 crane_disp = crane_perf.rename(
                     columns={
@@ -1025,149 +995,10 @@ with st.container(border=True):
                 )
 
     # ----------------------------------------------------------------
-    # TAB 3: ANALISIS PER VESSEL
-    # ----------------------------------------------------------------
-    with tab_vessel:
-        render_template("tab_vessel_info.html")
-
-        ves_id_bersih = out_df["VES_ID"].dropna().astype(str).str.strip()
-        ves_id_bersih = ves_id_bersih[ves_id_bersih != ""]
-        vessel_options = sorted(ves_id_bersih.unique().tolist())
-
-        if len(vessel_options) == 0:
-            st.info("Tidak ada data VES_ID pada hasil analisis ini.")
-        else:
-            selected_vessel = st.selectbox("Cari / pilih VES_ID", vessel_options)
-            vessel_df = out_df[out_df["VES_ID"].astype(str).str.strip() == selected_vessel]
-
-            total_rec = len(vessel_df)
-            dual_rec = int((vessel_df["STATUS"] == "Dual Cycle").sum())
-            non_dual_rec = total_rec - dual_rec
-            twinlift_rec = int((vessel_df["TWINLIFT_STATUS"] == "Twinlift").sum())
-            non_twinlift_rec = total_rec - twinlift_rec
-            combo_rec = int((vessel_df["CONTAINER_STATUS"] == "Combo").sum())
-            single_rec = total_rec - combo_rec
-            # Dual Cycle Murni  : pasangan Dual Cycle hanya berisi kontainer kapal ini.
-            # Dual Cycle Campuran: pasangan Dual Cycle melibatkan kontainer kapal lain.
-            dual_murni_rec = int((vessel_df["DUAL_JENIS"] == "Murni").sum())
-            dual_campuran_rec = int((vessel_df["DUAL_JENIS"] == "Campuran").sum())
-
-            v1, v2, v3, v4, v5 = st.columns(5)
-            with v1:
-                render_kpi_card("Total Aktivitas", format_number(total_rec), subtext="Baris Data", variant="purple")
-            with v2:
-                render_kpi_card("Dual Cycle", format_number(dual_rec), variant="blue")
-            with v3:
-                pct_dual_v = (dual_rec / total_rec * 100) if total_rec else 0
-                render_kpi_card("% Dual Cycle", f"{pct_dual_v:.1f}%", variant="blue")
-            with v4:
-                render_kpi_card("Twinlift", format_number(twinlift_rec), variant="blue")
-            with v5:
-                pct_twin_v = (twinlift_rec / total_rec * 100) if total_rec else 0
-                render_kpi_card("% Twinlift", f"{pct_twin_v:.1f}%", variant="blue")
-
-            # Rincian tambahan per kapal: Twinlift, muatan Combo, Dual Cycle murni vs campuran
-            w1, w2, w3, w4 = st.columns(4)
-            with w1:
-                render_kpi_card("Jumlah Twinlift", format_number(twinlift_rec), subtext="Kontainer", variant="blue")
-            with w2:
-                render_kpi_card("Muatan Combo", format_number(combo_rec), subtext="Kontainer", variant="teal")
-            with w3:
-                pct_murni_v = (dual_murni_rec / dual_rec * 100) if dual_rec else 0
-                render_kpi_card(
-                    "Dual Cycle Murni",
-                    format_number(dual_murni_rec),
-                    subtext=f"{pct_murni_v:.1f}% dari Dual Cycle • kapal ini saja",
-                    variant="emerald",
-                )
-            with w4:
-                pct_campuran_v = (dual_campuran_rec / dual_rec * 100) if dual_rec else 0
-                render_kpi_card(
-                    "Dual Cycle Campuran",
-                    format_number(dual_campuran_rec),
-                    subtext=f"{pct_campuran_v:.1f}% dari Dual Cycle • dengan kapal lain",
-                    variant="amber",
-                )
-
-            vc1, vc2 = st.columns(2)
-            with vc1:
-                if total_rec > 0:
-                    pie_dual_v = pd.DataFrame(
-                        {"Status": ["Dual Cycle", "Non Dual"], "Jumlah": [dual_rec, non_dual_rec]}
-                    )
-                    pie_dual_v = pie_dual_v[pie_dual_v["Jumlah"] > 0]
-                    fig_v1 = px.pie(
-                        pie_dual_v,
-                        names="Status",
-                        values="Jumlah",
-                        hole=0.52,
-                        title=f"Dual Cycle vs Non Dual — {selected_vessel}",
-                        color="Status",
-                        color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
-                    )
-                    fig_v1.update_traces(
-                        textinfo="percent+label",
-                        textposition="inside",
-                        insidetextorientation="horizontal",
-                        textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
-                        marker=dict(line=dict(color="#ffffff", width=2)),
-                    )
-                    apply_glass_theme(fig_v1)
-                    fig_v1.update_layout(margin=dict(t=72, b=25, l=25, r=25))
-                    st.plotly_chart(fig_v1, width="stretch")
-
-            with vc2:
-                if total_rec > 0:
-                    pie_twin_v = pd.DataFrame(
-                        {"Status": ["Twinlift", "Bukan Twinlift"], "Jumlah": [twinlift_rec, non_twinlift_rec]}
-                    )
-                    pie_twin_v = pie_twin_v[pie_twin_v["Jumlah"] > 0]
-                    fig_v2 = px.pie(
-                        pie_twin_v,
-                        names="Status",
-                        values="Jumlah",
-                        hole=0.52,
-                        title=f"Twinlift vs Bukan Twinlift — {selected_vessel}",
-                        color="Status",
-                        color_discrete_map={"Twinlift": "#0284C7", "Bukan Twinlift": "#94A3B8"},
-                    )
-                    fig_v2.update_traces(
-                        textinfo="percent+label",
-                        textposition="inside",
-                        insidetextorientation="horizontal",
-                        textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
-                        marker=dict(line=dict(color="#ffffff", width=2)),
-                    )
-                    apply_glass_theme(fig_v2)
-                    fig_v2.update_layout(margin=dict(t=72, b=25, l=25, r=25))
-                    st.plotly_chart(fig_v2, width="stretch")
-
-            vcont_df = pd.DataFrame(
-                {"Container": ["Combo", "Single"], "Jumlah": [combo_rec, single_rec]}
-            )
-            vcont_df["Jumlah_Tampil"] = vcont_df["Jumlah"].apply(format_number)
-            fig_v3 = px.bar(
-                vcont_df,
-                x="Container",
-                y="Jumlah",
-                title=f"Combo vs Single — {selected_vessel}",
-                color="Container",
-                color_discrete_map={"Combo": "#0EA5E9", "Single": "#64748B"},
-                text="Jumlah_Tampil",
-            )
-            apply_glass_theme(fig_v3)
-            st.plotly_chart(fig_v3, width="stretch")
-
-    # ----------------------------------------------------------------
-    # TAB 4: DOWNLOAD HASIL ANALISIS
+    # TAB 3: DOWNLOAD HASIL ANALISIS
     # ----------------------------------------------------------------
     with tab_download:
         st.dataframe(out_df.head(1000), use_container_width=True, height=400)
-        if len(out_df) > 1000:
-            st.caption(
-                f"Menampilkan 1.000 baris pertama dari total {format_number(len(out_df))} baris. "
-                "Gunakan tombol di bawah untuk mengunduh dataset lengkap."
-            )
 
         hasil_sig = (
             hasil["ambang_combo"],

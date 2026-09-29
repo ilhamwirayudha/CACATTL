@@ -35,9 +35,9 @@ from modules.ui import format_number
 # ================================================================
 # KONSTANTA DEFAULT (Kompak & Terkalibrasi dengan Macro VBA)
 # ================================================================
-AMBANG_COMBO_MENIT_DEFAULT = 40
-AMBANG_DUAL_MENIT_DEFAULT = 240  # 4 jam
-AMBANG_TWINLIFT_MENIT_DEFAULT = 1  # 1 menit selisih DISC_LOAD_TS
+AMBANG_COMBO_MENIT_DEFAULT = 5
+AMBANG_DUAL_MENIT_DEFAULT = 60  # 1 jam
+AMBANG_TWINLIFT_MENIT_DEFAULT = 5  # 5 menit selisih DISC_LOAD_TS
 SIZE_ELIGIBLE = 20  # Ukuran kontainer eligible Combo/Twinlift (20ft)
 # Twinlift hanya mungkin di kade internasional. Crane kade internasional ber-ID
 # berakhiran "I" (mis. 03I); crane kade domestik berakhiran "D" (mis. 04D)
