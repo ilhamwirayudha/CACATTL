@@ -47,6 +47,7 @@ from modules.ui import (
     render_kpi_card,
     render_template,
     show_activity_detail_dialog,
+    show_combo_detail_dialog,
     show_twinlift_detail_dialog,
 )
 
@@ -635,6 +636,32 @@ with st.container(border=True):
                     ),
                 )
                 st.plotly_chart(fig_combo20, use_container_width=True, key="donut_combo_single_chart")
+
+                # Tombol aksi langsung untuk membuka rincian modal Combo & Single
+                col_cb1, col_cb2, col_cb3 = st.columns(3)
+                with col_cb1:
+                    if st.button("🔍 Rincian Combo", use_container_width=True, key="btn_quick_combo_detail"):
+                        st.session_state["modal_combo_status"] = "Combo"
+                        st.session_state["show_combo_modal"] = True
+                        st.rerun()
+
+                with col_cb2:
+                    if st.button("🔍 Rincian Single", use_container_width=True, key="btn_quick_single_detail"):
+                        st.session_state["modal_combo_status"] = "Single"
+                        st.session_state["show_combo_modal"] = True
+                        st.rerun()
+
+                with col_cb3:
+                    if st.button("⚠️ Rincian Issue", use_container_width=True, key="btn_quick_combo_issue_detail", help="Lihat Gap 0 menit dan potensi Combo dengan jeda waktu melebihi ambang batas"):
+                        st.session_state["modal_combo_status"] = "Issue"
+                        st.session_state["show_combo_modal"] = True
+                        st.rerun()
+
+                # Tampilkan Pop-up Dialog Modal jika dipicu
+                if st.session_state.get("show_combo_modal") and st.session_state.get("modal_combo_status"):
+                    status_to_open = st.session_state["modal_combo_status"]
+                    st.session_state["show_combo_modal"] = False
+                    show_combo_detail_dialog(status_to_open, out_df, events, summary)
             else:
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
@@ -768,9 +795,9 @@ with st.container(border=True):
             render_kpi_card(
                 "Total Kontainer",
                 format_number(summary["container_total"]),
-                subtext="Semua Ukuran",
+                subtext="Semua Ukuran (20ft, 40ft, 45ft)",                
                 variant="purple",
-                tooltip="Total seluruh kontainer dari semua ukuran (20ft, 40ft, 45ft).",
+                tooltip="Total seluruh kontainer (20ft, 40ft, 45ft).",
             )
         with t2:
             render_kpi_card(
@@ -778,7 +805,7 @@ with st.container(border=True):
                 format_number(total_kontainer_20ft),
                 subtext=f"{format_percent(summary['pct_20ft_of_total'] * 100)} dari Total Kontainer",
                 variant="amber",
-                tooltip="Jumlah kontainer berukuran 20 kaki (20ft), satu-satunya ukuran yang dapat dioperasikan secara twinlift.",
+                tooltip="Jumlah kontainer 20ft.",
             )
         with t3:
             render_kpi_card(
@@ -786,7 +813,7 @@ with st.container(border=True):
                 format_number(total_twinlift_kontainer),
                 subtext="dari Kontainer 20ft",
                 variant="blue",
-                tooltip="Jumlah kontainer 20ft yang diangkat atau diangkut bersamaan secara berpasangan dalam ambang batas toleransi waktu.",
+                tooltip="Jumlah kontainer 20ft yang bisa diangkat secara bersamaan.",
             )
         with t4:
             render_kpi_card(
@@ -794,7 +821,7 @@ with st.container(border=True):
                 format_number(total_bukan_twinlift_kontainer),
                 subtext="dari Kontainer 20ft",
                 variant="slate",
-                tooltip="Jumlah kontainer 20ft yang diangkat atau diangkut secara tunggal (single lift).",
+                tooltip="Jumlah kontainer 20ft yang tidak diangkat secara bersamaan.",
             )
         with t5:
             render_kpi_card(
@@ -802,7 +829,7 @@ with st.container(border=True):
                 format_percent(pct_twinlift_20ft_val),
                 subtext="Basis Kontainer 20ft",
                 variant="blue",
-                tooltip="Persentase kontainer 20ft yang beroperasi secara twinlift terhadap total kontainer 20ft (Twinlift ÷ Total 20ft × 100%).",
+                tooltip="Persentase kontainer 20ft yang diangkat secara bersamaan (Twinlift ÷ Total 20ft × 100%).",
                 align_tooltip_right=True,
             )
 

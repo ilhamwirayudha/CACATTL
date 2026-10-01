@@ -1058,6 +1058,599 @@ def show_activity_detail_dialog(status: str, events: pd.DataFrame, out_df: pd.Da
         _show_non_dual_dialog(events, out_df, summary)
 
 
+def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Menyusun tabel rincian operasional Combo (basis kontainer 20ft).
+    Setiap baris mewakili 1 pasangan Combo (2 kontainer 20ft dalam 1 ritase).
+    """
+    if out_df is None or len(out_df) == 0:
+        return pd.DataFrame()
+
+    df_c = out_df[(out_df["CTR_SIZE"] == 20) & (out_df["CONTAINER_STATUS"] == "Combo")].copy()
+    if len(df_c) == 0:
+        return pd.DataFrame()
+
+    df_c["TS_G"] = pd.to_datetime(df_c["TS_G"])
+    df_c["TS_H"] = pd.to_datetime(df_c["TS_H"])
+    df_c = df_c.sort_values(by=["EVENT_ID", "TS_G"])
+
+    g = df_c.groupby("EVENT_ID")
+    r1 = g.first().reset_index()
+    r2 = g.last().reset_index()
+
+    counts = g.size().reset_index(name="cnt")
+    valid_eids = set(counts.loc[counts["cnt"] == 2, "EVENT_ID"])
+    r1 = r1[r1["EVENT_ID"].isin(valid_eids)].reset_index(drop=True)
+    r2 = r2[r2["EVENT_ID"].isin(valid_eids)].reset_index(drop=True)
+
+    if len(r1) == 0:
+        return pd.DataFrame()
+
+    gap_g = (r2["TS_G"] - r1["TS_G"]).dt.total_seconds().abs() / 60.0
+    gap_h = (r2["TS_H"] - r1["TS_H"]).dt.total_seconds().abs() / 60.0
+    gap = np.minimum(gap_g, gap_h).round(1)
+
+    truk_id = r1["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
+    ves_id = r1["VES_ID"].fillna("-").astype(str)
+    crane_id = r1["CRANE_ID"].fillna("-").astype(str)
+    act = r1["ACTIVITY"].fillna("-").astype(str)
+    twin_status = r1.get("TWINLIFT_STATUS", pd.Series(["-"] * len(r1))).fillna("-").astype(str)
+
+    ringkasan = (
+        truk_id
+        + " | "
+        + act
+        + " ("
+        + ves_id
+        + ", "
+        + crane_id
+        + ") | 2x 20ft | Gap: "
+        + gap.apply(lambda g: format_decimal(g, 1))
+        + " mnt"
+    )
+
+    res = pd.DataFrame(
+        {
+            "Truk": truk_id,
+            "Format Rincian": ringkasan,
+            "Event ID": r1["EVENT_ID"],
+            "Aktivitas": act,
+            "Kapal": ves_id,
+            "Crane": crane_id,
+            "DISC_LOAD_TS1": r1["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "DISC_LOAD_TS2": r2["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "STACK_UNSTACK_TS1": r1["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "STACK_UNSTACK_TS2": r2["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "Gap Combo (Menit)": gap,
+        }
+    )
+    return res.sort_values(by=["Event ID", "Truk"]).reset_index(drop=True)
+
+
+def prepare_single_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Menyusun tabel rincian operasional Single (basis kontainer 20ft).
+    Setiap baris mewakili 1 kontainer 20ft yang diangkut tunggal (1 kontainer per ritase).
+    """
+    if out_df is None or len(out_df) == 0:
+        return pd.DataFrame()
+
+    df_s = out_df[(out_df["CTR_SIZE"] == 20) & (out_df["CONTAINER_STATUS"] == "Single")].copy()
+    if len(df_s) == 0:
+        return pd.DataFrame()
+
+    df_s["TS_G"] = pd.to_datetime(df_s["TS_G"])
+    df_s["TS_H"] = pd.to_datetime(df_s["TS_H"])
+
+    truk_id = df_s["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
+    ves_id = df_s["VES_ID"].fillna("-").astype(str)
+    crane_id = df_s["CRANE_ID"].fillna("-").astype(str)
+    act = df_s["ACTIVITY"].fillna("-").astype(str)
+
+    durasi_mnt = ((df_s["TS_H"] - df_s["TS_G"]).dt.total_seconds().abs() / 60.0).round(1)
+
+    ringkasan = (
+        truk_id
+        + " | "
+        + act
+        + " ("
+        + ves_id
+        + ", "
+        + crane_id
+        + ") | 1x 20ft | Single Ritase"
+    )
+
+    res = pd.DataFrame(
+        {
+            "Truk": truk_id,
+            "Format Rincian": ringkasan,
+            "Event ID": df_s["EVENT_ID"],
+            "Aktivitas": act,
+            "Kapal": ves_id,
+            "Crane": crane_id,
+            "DISC_LOAD_TS": df_s["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "STACK_UNSTACK_TS": df_s["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "Durasi (Menit)": durasi_mnt,
+        }
+    )
+    return res.sort_values(by=["Event ID", "Truk"]).reset_index(drop=True)
+
+
+def prepare_combo_gap_zero_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd.DataFrame:
+    """
+    Menyusun tabel anomali Combo dengan gap 0.0 menit (indikasi timestamp kembar / human error).
+    """
+    df_combo = prepare_combo_table(out_df, events)
+    if len(df_combo) == 0:
+        return pd.DataFrame()
+    return df_combo[df_combo["Gap Combo (Menit)"] <= 0.0].reset_index(drop=True)
+
+
+def prepare_potential_combo_table(
+    out_df: pd.DataFrame,
+    events: pd.DataFrame = None,
+    ambang_combo: float = 3.0,
+    max_gap: float = 60.0,
+) -> pd.DataFrame:
+    """
+    Menyusun tabel potensi Combo tertunda:
+    Kontainer 20ft pada truk yang sama dan aktivitas yang sama (DISC-DISC atau LOAD-LOAD),
+    namun jeda waktu tunggunya melebihi ambang_combo (dan <= max_gap menit),
+    sehingga terpaksa dihitung sebagai Single terpisah.
+    """
+    if out_df is None or len(out_df) == 0:
+        return pd.DataFrame()
+
+    df20 = out_df[out_df["CTR_SIZE"] == 20].copy()
+    if len(df20) < 2:
+        return pd.DataFrame()
+
+    df20["TS_G"] = pd.to_datetime(df20["TS_G"])
+    df20["TS_H"] = pd.to_datetime(df20["TS_H"])
+
+    potentials = []
+    for (truck, act), group in df20.groupby(["CAR_CHE_ID", "ACTIVITY"]):
+        g_sorted = group.sort_values("TS_G").reset_index(drop=True)
+        m = len(g_sorted)
+        for i in range(m - 1):
+            r1 = g_sorted.iloc[i]
+            r2 = g_sorted.iloc[i + 1]
+            if r1["EVENT_ID"] == r2["EVENT_ID"]:
+                continue
+            gap_g = abs((r2["TS_G"] - r1["TS_G"]).total_seconds()) / 60.0
+            gap_h = abs((r2["TS_H"] - r1["TS_H"]).total_seconds()) / 60.0
+            gap = min(gap_g, gap_h)
+            gap_r = round(gap, 1)
+
+            if gap_r > ambang_combo and gap_r <= max_gap:
+                truk_id = str(truck).replace(".0", "")
+                ves1 = str(r1["VES_ID"])
+                ves2 = str(r2["VES_ID"])
+                cr1 = str(r1["CRANE_ID"])
+                cr2 = str(r2["CRANE_ID"])
+                ringkasan = f"{truk_id} | {act} ({ves1}, {cr1}) | ➔ {gap_r:.1f} mnt ➔ | {act} ({ves2}, {cr2})"
+                potentials.append(
+                    {
+                        "Truk": truk_id,
+                        "Format Rincian": ringkasan,
+                        "Aktivitas": act,
+                        "Kapal 1": ves1,
+                        "Crane 1": cr1,
+                        "Kapal 2": ves2,
+                        "Crane 2": cr2,
+                        "Waktu 1": r1["TS_G"].strftime("%d/%m/%y %H:%M"),
+                        "Waktu 2": r2["TS_G"].strftime("%d/%m/%y %H:%M"),
+                        "Gap (Menit)": gap_r,
+                        "Kelebihan Ambang": round(gap_r - ambang_combo, 1),
+                    }
+                )
+
+    if not potentials:
+        return pd.DataFrame()
+    df_pot = pd.DataFrame(potentials)
+    return df_pot.sort_values(by=["Gap (Menit)", "Truk"]).reset_index(drop=True)
+
+
+@st.dialog("Rincian Aktivitas Combo (Kontainer 20ft)", width="large")
+def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up rincian aktivitas Combo (2x 20ft per ritase).
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            var pDoc = window.parent.document;
+            function getActiveModal() {
+                return pDoc.querySelector('div[role="dialog"]');
+            }
+            pDoc.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    var m = getActiveModal();
+                    if (m) {
+                        e.stopImmediatePropagation();
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }
+                }
+            }, true);
+            function blockOutside(e) {
+                var m = getActiveModal();
+                if (m && !m.contains(e.target)) {
+                    e.stopImmediatePropagation();
+                    e.stopPropagation();
+                    e.preventDefault();
+                }
+            }
+            pDoc.addEventListener('mousedown', blockOutside, true);
+            pDoc.addEventListener('click', blockOutside, true);
+            pDoc.addEventListener('pointerdown', blockOutside, true);
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+    df_data = prepare_combo_table(out_df, events)
+    if len(df_data) == 0:
+        st.info("Tidak ada data aktivitas Combo yang ditemukan pada dataset ini.")
+        if st.button("Tutup", key="btn_close_empty_combo", type="secondary"):
+            st.rerun()
+        return
+
+    total_ritase = len(df_data)
+    total_kontainer = total_ritase * 2
+    total_trucks = df_data["Truk"].nunique()
+    avg_gap = df_data["Gap Combo (Menit)"].mean()
+
+    mk1, mk2, mk3, mk4 = st.columns(4)
+    with mk1:
+        render_kpi_card(
+            label="Total Ritase Combo",
+            value=f"{format_number(total_ritase)} Pasang",
+            variant="blue",
+            tooltip="Jumlah pergerakan 2 kontainer dalam 1 truk yang sama.",
+        )
+    with mk2:
+        render_kpi_card(
+            label="Total Kontainer",
+            value=f"{format_number(total_kontainer)} Box",
+            variant="purple",
+            tooltip="Jumlah kontainer 20ft yang terangkut secara bersamaan.",
+        )
+    with mk3:
+        render_kpi_card(
+            label="Jumlah Truk",
+            value=f"{format_number(total_trucks)} Truk",
+            variant="amber",
+            tooltip="Jumlah truk yang membawa 2 kontainer.",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Rata-rata Gap Combo",
+            value=f"{format_decimal(avg_gap, 1)} mnt",
+            variant="blue",
+            tooltip="Rata-rata selisih waktu aktivitas 2 kontainer.",
+            align_tooltip_right=True,
+        )
+
+    q = st.text_input("🔍 Cari Truk, Kapal, atau Ringkasan Combo:", key="search_combo_detail_q", placeholder="Ketik nomor truk, kode kapal, crane...")
+    filtered_df = df_data.copy()
+    if q:
+        q_lower = q.lower()
+        mask = (
+            filtered_df["Truk"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Format Rincian"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Kapal"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Crane"].str.lower().str.contains(q_lower, na=False)
+        )
+        filtered_df = filtered_df[mask]
+
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        hide_index=True,
+        height=450,
+        column_config={
+            "Truk": st.column_config.TextColumn("No Truk", width="small"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Combo", width="medium"),
+            "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
+            "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+            "Kapal": st.column_config.TextColumn("Kapal", width="small"),
+            "Crane": st.column_config.TextColumn("Crane", width="small"),
+            "DISC_LOAD_TS1": st.column_config.TextColumn("DISC_LOAD_TS1", width="small"),
+            "DISC_LOAD_TS2": st.column_config.TextColumn("DISC_LOAD_TS2", width="small"),
+            "STACK_UNSTACK_TS1": st.column_config.TextColumn("STACK_UNSTACK_TS1", width="small"),
+            "STACK_UNSTACK_TS2": st.column_config.TextColumn("STACK_UNSTACK_TS2", width="small"),
+            "Gap Combo (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+        },
+    )
+
+@st.dialog("Rincian Aktivitas Single (Kontainer 20ft)", width="large")
+def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up rincian aktivitas Single (1x 20ft per ritase).
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            var pDoc = window.parent.document;
+            function getActiveModal() {
+                return pDoc.querySelector('div[role="dialog"]');
+            }
+            pDoc.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    var m = getActiveModal();
+                    if (m) {
+                        e.stopImmediatePropagation();
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }
+                }
+            }, true);
+            function blockOutside(e) {
+                var m = getActiveModal();
+                if (m && !m.contains(e.target)) {
+                    e.stopImmediatePropagation();
+                    e.stopPropagation();
+                    e.preventDefault();
+                }
+            }
+            pDoc.addEventListener('mousedown', blockOutside, true);
+            pDoc.addEventListener('click', blockOutside, true);
+            pDoc.addEventListener('pointerdown', blockOutside, true);
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+    df_data = prepare_single_table(out_df, events)
+    if len(df_data) == 0:
+        st.info("Tidak ada data aktivitas Single 20ft yang ditemukan pada dataset ini.")
+        if st.button("Tutup", key="btn_close_empty_single", type="secondary"):
+            st.rerun()
+        return
+
+    total_ritase = len(df_data)
+    total_kontainer = total_ritase
+    total_trucks = df_data["Truk"].nunique()
+    avg_durasi = df_data["Durasi (Menit)"].mean() if "Durasi (Menit)" in df_data.columns else 0.0
+
+    mk1, mk2, mk3, mk4 = st.columns(4)
+    with mk1:
+        render_kpi_card(
+            label="Total Ritase Single",
+            value=f"{format_number(total_ritase)} Ritase",
+            variant="blue",
+            tooltip="Jumlah pergerakan 1 kontainer dalam 1 truk yang sama (Single).",
+        )
+    with mk2:
+        render_kpi_card(
+            label="Total Kontainer",
+            value=f"{format_number(total_kontainer)} Box",
+            variant="purple",
+            tooltip="Jumlah kontainer 20ft yang diangkut tunggal (1 kontainer per ritase).",
+        )
+    with mk3:
+        render_kpi_card(
+            label="Jumlah Truk",
+            value=f"{format_number(total_trucks)} Truk",
+            variant="amber",
+            tooltip="Jumlah truk yang membawa 1 kontainer.",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Rata-rata Durasi Single",
+            value=f"{format_decimal(avg_durasi, 1)} mnt",
+            variant="blue",
+            tooltip="Rata-rata durasi pergerakan aktivitas ritase kontainer Single.",
+            align_tooltip_right=True,
+        )
+
+    q = st.text_input("🔍 Cari Truk, Kapal, atau Ringkasan Single:", key="search_single_detail_q", placeholder="Ketik nomor truk, kode kapal, crane...")
+    filtered_df = df_data.copy()
+    if q:
+        q_lower = q.lower()
+        mask = (
+            filtered_df["Truk"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Format Rincian"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Kapal"].str.lower().str.contains(q_lower, na=False)
+            | filtered_df["Crane"].str.lower().str.contains(q_lower, na=False)
+        )
+        filtered_df = filtered_df[mask]
+
+    st.dataframe(
+        filtered_df,
+        use_container_width=True,
+        hide_index=True,
+        height=450,
+        column_config={
+            "Truk": st.column_config.TextColumn("No Truk", width="small"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Single", width="medium"),
+            "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
+            "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+            "Kapal": st.column_config.TextColumn("Kapal", width="small"),
+            "Crane": st.column_config.TextColumn("Crane", width="small"),
+            "DISC_LOAD_TS": st.column_config.TextColumn("DISC_LOAD_TS", width="small"),
+            "STACK_UNSTACK_TS": st.column_config.TextColumn("STACK_UNSTACK_TS", width="small"),
+            "Durasi (Menit)": st.column_config.NumberColumn("Durasi (Mnt)", format="%.1f mnt", width="small"),
+        },
+    )
+
+
+@st.dialog("Rincian Issue Operasional & Potensi Combo (Kontainer 20ft)", width="large")
+def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up rincian anomali dan potensi Combo tertunda.
+    """
+    components.html(
+        """
+        <script>
+        (function() {
+            var pDoc = window.parent.document;
+            function getActiveModal() {
+                return pDoc.querySelector('div[role="dialog"]');
+            }
+            pDoc.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    var m = getActiveModal();
+                    if (m) {
+                        e.stopImmediatePropagation();
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }
+                }
+            }, true);
+            function blockOutside(e) {
+                var m = getActiveModal();
+                if (m && !m.contains(e.target)) {
+                    e.stopImmediatePropagation();
+                    e.stopPropagation();
+                    e.preventDefault();
+                }
+            }
+            pDoc.addEventListener('mousedown', blockOutside, true);
+            pDoc.addEventListener('click', blockOutside, true);
+            pDoc.addEventListener('pointerdown', blockOutside, true);
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+    ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
+    df_anomali = prepare_combo_gap_zero_table(out_df, events)
+    df_potensi = prepare_potential_combo_table(out_df, events, ambang_combo=ambang_combo)
+
+    total_anomali = len(df_anomali)
+    total_potensi = len(df_potensi)
+    truk_anomali = set(df_anomali["Truk"].tolist()) if total_anomali > 0 else set()
+    truk_potensi = set(df_potensi["Truk"].tolist()) if total_potensi > 0 else set()
+    truk_terdampak = len(truk_anomali.union(truk_potensi))
+    avg_gap_potensi = df_potensi["Gap (Menit)"].mean() if total_potensi > 0 else 0.0
+
+    mk1, mk2, mk3, mk4 = st.columns(4)
+    with mk1:
+        render_kpi_card(
+            label="Gap 0 Mnt",
+            value=f"{format_number(total_anomali)} Pasang",
+            variant="amber",
+            tooltip="Pasangan Combo dengan perbedaan waktu lifting persis 0.0 menit (indikasi timestamp ganda / human error).",
+        )
+    with mk2:
+        render_kpi_card(
+            label="Potensi Combo",
+            value=f"{format_number(total_potensi)} Pasang",
+            variant="blue",
+            tooltip=f"Pasangan kontainer 20ft pada aktivitas sama yang tidak ter-combo karena jeda waktu melebihi ambang batas ({ambang_combo:.0f} mnt).",
+        )
+    with mk3:
+        render_kpi_card(
+            label="Jumlah Truk",
+            value=f"{format_number(truk_terdampak)} Truk",
+            variant="amber",
+            tooltip="Total armada truk unik yang teridentifikasi memiliki anomali atau potensi Combo.",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Rata-rata Gap Potensi",
+            value=f"{format_decimal(avg_gap_potensi, 1)} mnt",
+            variant="blue",
+            tooltip=f"Rata-rata jeda waktu pada pasangan kontainer potensi Combo yang melebihi ambang batas ({ambang_combo:.0f} mnt).",
+            align_tooltip_right=True,
+        )
+
+    tab_anomali, tab_potensi = st.tabs([
+        f"⏱️ Anomali Gap 0 Menit ({format_number(total_anomali)})",
+        f"📦 Potensi Combo ({format_number(total_potensi)})",
+    ])
+
+    with tab_anomali:
+        if total_anomali == 0:
+            st.success("Tidak ditemukan anomali gap 0 menit pada ritase Combo.")
+        else:
+            q_anomali = st.text_input("🔍 Cari Truk atau Ringkasan Anomali (Gap 0):", key="search_combo_issue_anomali_q", placeholder="Ketik nomor truk atau kode kapal...")
+            df_anom_filtered = df_anomali.copy()
+            if q_anomali:
+                q_lower = q_anomali.lower()
+                m = df_anom_filtered["Truk"].str.lower().str.contains(q_lower, na=False) | df_anom_filtered["Format Rincian"].str.lower().str.contains(q_lower, na=False)
+                df_anom_filtered = df_anom_filtered[m]
+
+            st.dataframe(
+                df_anom_filtered,
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config={
+                    "Truk": st.column_config.TextColumn("No Truk", width="small"),
+                    "Format Rincian": st.column_config.TextColumn("Ringkasan Combo", width="medium"),
+                    "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
+                    "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+                    "Kapal": st.column_config.TextColumn("Kapal", width="small"),
+                    "Crane": st.column_config.TextColumn("Crane", width="small"),
+                    "DISC_LOAD_TS1": st.column_config.TextColumn("DISC_LOAD_TS1", width="small"),
+                    "DISC_LOAD_TS2": st.column_config.TextColumn("DISC_LOAD_TS2", width="small"),
+                    "STACK_UNSTACK_TS1": st.column_config.TextColumn("STACK_UNSTACK_TS1", width="small"),
+                    "STACK_UNSTACK_TS2": st.column_config.TextColumn("STACK_UNSTACK_TS2", width="small"),
+                    "Gap Combo (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+                },
+            )
+
+    with tab_potensi:
+        if total_potensi == 0:
+            st.success("Tidak ada kontainer dengan aktivitas sama yang jeda waktunya melebihi ambang batas.")
+        else:
+            fc1, fc2 = st.columns([2, 1.2])
+            with fc1:
+                q_potensi = st.text_input("🔍 Cari Truk atau Ringkasan Siklus (Potensi Combo):", key="search_combo_issue_potensi_q", placeholder="Ketik nomor truk atau kode kapal...")
+            with fc2:
+                max_gap_filter = st.slider("Maksimal Gap (Menit):", min_value=int(ambang_combo) + 1, max_value=60, value=30, step=5, key="slider_max_gap_combo_potensi")
+
+            df_pot_filtered = df_potensi[df_potensi["Gap (Menit)"] <= max_gap_filter].copy()
+            if q_potensi:
+                qp_lower = q_potensi.lower()
+                m_pot = df_pot_filtered["Truk"].str.lower().str.contains(qp_lower, na=False) | df_pot_filtered["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
+                df_pot_filtered = df_pot_filtered[m_pot]
+
+            st.dataframe(
+                df_pot_filtered,
+                use_container_width=True,
+                hide_index=True,
+                height=400,
+                column_config={
+                    "Truk": st.column_config.TextColumn("No Truk", width="small"),
+                    "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Combo", width="medium"),
+                    "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+                    "Kapal 1": st.column_config.TextColumn("Kapal 1", width="small"),
+                    "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
+                    "Kapal 2": st.column_config.TextColumn("Kapal 2", width="small"),
+                    "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
+                    "Waktu 1": st.column_config.TextColumn("Waktu 1", width="small"),
+                    "Waktu 2": st.column_config.TextColumn("Waktu 2", width="small"),
+                    "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+                    "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
+                },
+            )
+
+
+def show_combo_detail_dialog(status: str, out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up interaktif rincian operasional Combo
+    ('Combo', 'Single', atau 'Issue').
+    """
+    if status == "Combo":
+        _show_combo_dialog(out_df, events, summary)
+    elif status == "Single":
+        _show_single_dialog(out_df, events, summary)
+    elif status == "Issue":
+        _show_combo_issue_dialog(out_df, events, summary)
+
+
 def prepare_twinlift_table(out_df: pd.DataFrame) -> pd.DataFrame:
     """
     Menyusun tabel rincian operasional Twinlift (basis kontainer 20ft).
