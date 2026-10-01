@@ -2456,15 +2456,19 @@ div[data-testid="stDialog"] {
     z-index: 999999 !important;
 }
 
-div[data-testid="stDialog"] > div:first-child {
+div[data-testid="stDialog"] > div:first-child,
+div[data-baseweb="modal"] > div:first-child,
+div[data-testid="stDialogBackdrop"] {
     background: rgba(3, 7, 18, 0.78) !important;
     backdrop-filter: blur(12px) !important;
     -webkit-backdrop-filter: blur(12px) !important;
+    pointer-events: none !important;
 }
 
 div[data-testid="stDialog"] div[role="dialog"],
 div[data-baseweb="modal"] div[role="dialog"],
 div[role="dialog"][aria-modal="true"] {
+    pointer-events: auto !important;
     background: #0b1322 !important;
     background-color: #0b1322 !important;
     border: 1px solid rgba(56, 189, 248, 0.32) !important;
@@ -2502,6 +2506,48 @@ div[data-testid="stDialog"] [data-testid="stHeadingWithActionElements"] h2 {
     letter-spacing: -0.2px !important;
     color: #f8fafc !important;
     margin-bottom: 0.5rem !important;
+}
+
+/* Dialog KPI Cards Styling & Downward Tooltips */
+div[data-testid="stDialog"] .kpi-card,
+div[role="dialog"] .kpi-card {
+    min-height: 82px !important;
+    padding: 12px 18px !important;
+    margin-bottom: 14px !important;
+}
+
+div[data-testid="stDialog"] .kpi-card .kpi-value,
+div[role="dialog"] .kpi-card .kpi-value {
+    font-size: 1.55rem !important;
+    line-height: 1.2 !important;
+}
+
+div[data-testid="stDialog"] .kpi-tooltip-bubble,
+div[role="dialog"] .kpi-tooltip-bubble {
+    top: calc(100% + 8px) !important;
+    bottom: auto !important;
+    transform: translateY(-6px);
+}
+
+div[data-testid="stDialog"] .kpi-tooltip-container:hover .kpi-tooltip-bubble,
+div[role="dialog"] .kpi-tooltip-container:hover .kpi-tooltip-bubble,
+div[data-testid="stDialog"] .kpi-tooltip-trigger:focus + .kpi-tooltip-bubble,
+div[role="dialog"] .kpi-tooltip-trigger:focus + .kpi-tooltip-bubble {
+    transform: translateY(0) !important;
+}
+
+div[data-testid="stDialog"] .kpi-tooltip-bubble::after,
+div[role="dialog"] .kpi-tooltip-bubble::after {
+    top: auto !important;
+    bottom: 100% !important;
+    border-color: transparent transparent rgba(10, 18, 34, 0.97) transparent !important;
+}
+
+div[data-testid="stDialog"] .kpi-tooltip-bubble::before,
+div[role="dialog"] .kpi-tooltip-bubble::before {
+    top: auto !important;
+    bottom: 100% !important;
+    border-color: transparent transparent rgba(56, 189, 248, 0.35) transparent !important;
 }
 
 /* Enhanced Visible Scrollbars for Dialog & DataGrid */

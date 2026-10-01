@@ -106,6 +106,45 @@
                 }, true);
             }
 
+            // Modal Protection: Modal hanya bisa ditutup dengan tombol 'X' di pojok kanan atas
+            if (!win.__cacaModalProtectionInstalled) {
+                win.__cacaModalProtectionInstalled = true;
+
+                function getActiveModal() {
+                    return doc.querySelector('div[role="dialog"][aria-modal="true"]') ||
+                           doc.querySelector('div[data-testid="stDialog"] div[role="dialog"]');
+                }
+
+                // 1. Blok tombol ESC pada keyboard
+                doc.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape' || e.keyCode === 27) {
+                        var modal = getActiveModal();
+                        if (modal) {
+                            e.stopImmediatePropagation();
+                            e.stopPropagation();
+                            e.preventDefault();
+                        }
+                    }
+                }, true);
+
+                // 2. Blok klik di luar modal (backdrop / cursor di area luar dialog)
+                function blockOutsideClick(e) {
+                    var modal = getActiveModal();
+                    if (modal) {
+                        // Jika target klik BUKAN di dalam modal dialog, cegah penutupan modal
+                        if (!modal.contains(e.target)) {
+                            e.stopImmediatePropagation();
+                            e.stopPropagation();
+                            e.preventDefault();
+                        }
+                    }
+                }
+
+                doc.addEventListener('mousedown', blockOutsideClick, true);
+                doc.addEventListener('click', blockOutsideClick, true);
+                doc.addEventListener('pointerdown', blockOutsideClick, true);
+            }
+
         } catch (err) {
             console.error('CACA transition setup error:', err);
         }

@@ -35,9 +35,9 @@ from modules.ui import format_number
 # ================================================================
 # KONSTANTA DEFAULT (Kompak & Terkalibrasi dengan Macro VBA)
 # ================================================================
-AMBANG_COMBO_MENIT_DEFAULT = 5
-AMBANG_DUAL_MENIT_DEFAULT = 60  # 1 jam
-AMBANG_TWINLIFT_MENIT_DEFAULT = 5  # 5 menit selisih DISC_LOAD_TS
+AMBANG_COMBO_MENIT_DEFAULT = 3
+AMBANG_DUAL_MENIT_DEFAULT = 30  # 30 menit
+AMBANG_TWINLIFT_MENIT_DEFAULT = 1  # 1 menit selisih DISC_LOAD_TS
 SIZE_ELIGIBLE = 20  # Ukuran kontainer eligible Combo/Twinlift (20ft)
 # Twinlift hanya mungkin di kade internasional. Crane kade internasional ber-ID
 # berakhiran "I" (mis. 03I); crane kade domestik berakhiran "D" (mis. 04D)
@@ -113,8 +113,8 @@ def siapkan_data(raw: pd.DataFrame, col_map: dict, size_eligible: int) -> pd.Dat
     df["ACTIVITY"] = np.where(act_str.str.contains("LOAD", na=False), "LOAD", "DISC")
 
     # Parsing datetime cepat
-    df["TS_G"] = pd.to_datetime(raw[col_map["ts_g"]], errors="coerce", format="mixed")
-    df["TS_H"] = pd.to_datetime(raw[col_map["ts_h"]], errors="coerce", format="mixed")
+    df["TS_G"] = pd.to_datetime(raw[col_map["ts_g"]], errors="coerce", format="mixed", dayfirst=True)
+    df["TS_H"] = pd.to_datetime(raw[col_map["ts_h"]], errors="coerce", format="mixed", dayfirst=True)
 
     both_invalid = df["TS_G"].isna() & df["TS_H"].isna()
     df["TS_G"] = df["TS_G"].fillna(df["TS_H"])
@@ -280,6 +280,7 @@ def bentuk_event(df: pd.DataFrame) -> pd.DataFrame:
             "CAR_CHE_ID": df["CAR_CHE_ID"].to_numpy(),
             "EVT_START": evt_start,
             "EVT_END": evt_end,
+            "TS_G": df["TS_G"].to_numpy(),
         }
     )
 
@@ -291,6 +292,7 @@ def bentuk_event(df: pd.DataFrame) -> pd.DataFrame:
         CRANE_ID=("CRANE_ID", "first"),
         START_TS=("EVT_START", "min"),
         END_TS=("EVT_END", "max"),
+        TS_DERMAGA=("TS_G", "min"),
         N_ANGGOTA=("GROUP_ID", "size"),
     ).reset_index()
 
@@ -343,6 +345,10 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
             i = pos_sorted[a]
             for b in range(a + 1, m):
                 k = pos_sorted[b]
+                start_diff = (start[k] - start[i]) / np.timedelta64(1, "m")
+                if start_diff > ambang_dual + 180:
+                    break
+
                 gap_ab = (start[k] - end[i]) / np.timedelta64(1, "m")
                 gap_ba = (start[i] - end[k]) / np.timedelta64(1, "m")
                 if gap_ab >= 0:
@@ -350,10 +356,17 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
                 elif gap_ba >= 0:
                     gap = gap_ba
                 else:
-                    gap = 0.0
+                    overlap = min(abs(gap_ab), abs(gap_ba))
+                    if overlap <= 10.0 and start_diff <= ambang_dual + 60:
+                        gap = 0.0
+                    else:
+                        continue
 
-                if gap > ambang_dual:
-                    break
+                gap_r = round(gap, 1)
+                if gap_r > ambang_dual:
+                    if gap_ab >= 0:
+                        break
+                    continue
 
                 if activity[i] != activity[k]:
                     pairs.append((i, k, gap))
@@ -506,8 +519,10 @@ def hitung_breakdown_waktu(events: pd.DataFrame) -> dict:
     hitung_ringkasan().
     """
     ev = events.copy()
-    ev["TANGGAL"] = ev["START_TS"].dt.date
-    jam = ev["START_TS"].dt.hour
+    ts_ref = ev["TS_DERMAGA"] if "TS_DERMAGA" in ev.columns else ev["START_TS"]
+    ts_ref = pd.to_datetime(ts_ref, dayfirst=True)
+    ev["TANGGAL"] = ts_ref.dt.date
+    jam = ts_ref.dt.hour
 
     shift_labels = ["Shift 1 (00.00-08.00)", "Shift 2 (08.00-16.00)", "Shift 3 (16.00-00.00)"]
     ev["SHIFT"] = pd.cut(jam, bins=[-1, 7, 15, 23], labels=shift_labels, include_lowest=True)
@@ -556,10 +571,14 @@ def extract_period_options_from_events(events: pd.DataFrame):
     Mengekstrak daftar opsi periode (hari, minggu, bulan) dari DataFrame events/raw.
     Mengembalikan (days_dict, weeks_dict, months_dict, min_date, max_date).
     """
-    if events is None or len(events) == 0 or "START_TS" not in events.columns:
+    if events is None or len(events) == 0:
         return {}, {}, {}, None, None
 
-    ts_series = pd.to_datetime(events["START_TS"], errors="coerce").dropna()
+    col = "TS_DERMAGA" if "TS_DERMAGA" in events.columns else ("START_TS" if "START_TS" in events.columns else None)
+    if col is None:
+        return {}, {}, {}, None, None
+
+    ts_series = pd.to_datetime(events[col], errors="coerce", dayfirst=True).dropna()
     if len(ts_series) == 0:
         return {}, {}, {}, None, None
 
@@ -713,14 +732,16 @@ def filter_dataset_by_period(events: pd.DataFrame, out_df: pd.DataFrame, start_d
     if start_date is None or end_date is None or events is None or out_df is None:
         return events, out_df
 
-    events_dt = pd.to_datetime(events["START_TS"]).dt.date
+    ts_ev = events["TS_DERMAGA"] if "TS_DERMAGA" in events.columns else events["START_TS"]
+    events_dt = pd.to_datetime(ts_ev, dayfirst=True).dt.date
     mask_events = (events_dt >= start_date) & (events_dt <= end_date)
     filtered_events = events[mask_events].reset_index(drop=True)
 
     if "EVENT_ID" in out_df.columns:
         filtered_out_df = out_df[out_df["EVENT_ID"].isin(filtered_events["EVENT_ID"])].reset_index(drop=True)
     else:
-        out_dt = pd.to_datetime(out_df["START_TS"]).dt.date
+        ts_out = out_df["TS_G"] if "TS_G" in out_df.columns else (out_df["TS_DERMAGA"] if "TS_DERMAGA" in out_df.columns else out_df["START_TS"])
+        out_dt = pd.to_datetime(ts_out, dayfirst=True).dt.date
         mask_out = (out_dt >= start_date) & (out_dt <= end_date)
         filtered_out_df = out_df[mask_out].reset_index(drop=True)
 
@@ -781,7 +802,8 @@ def hitung_ringkasan(events: pd.DataFrame, out_df: pd.DataFrame, size_eligible: 
     pct_bukan_twinlift_of_20ft = (total_bukan_twinlift_kontainer / total_20ft) if total_20ft else 0
 
     ev = events.copy()
-    ev["BULAN"] = ev["START_TS"].dt.to_period("M")
+    ts_month = ev["TS_DERMAGA"] if "TS_DERMAGA" in ev.columns else ev["START_TS"]
+    ev["BULAN"] = pd.to_datetime(ts_month, dayfirst=True).dt.to_period("M")
     ev["_is_dual"] = (ev["STATUS"] == "Dual Cycle").astype(int)
     ev["_is_combo"] = (ev["CONTAINER_STATUS"] == "Combo").astype(int)
     ev["_is_twinlift"] = (ev["TWINLIFT_STATUS"] == "Twinlift").astype(int)
@@ -822,7 +844,7 @@ def hitung_ringkasan(events: pd.DataFrame, out_df: pd.DataFrame, size_eligible: 
     # ------------------------------------------------------------
     if total_20ft > 0:
         df20m = df20.copy()
-        df20m["BULAN"] = df20m["TS_G"].dt.to_period("M")
+        df20m["BULAN"] = pd.to_datetime(df20m["TS_G"], dayfirst=True).dt.to_period("M")
         monthly_20ft = df20m.groupby("BULAN").agg(
             total_20ft=("CTR_SIZE", "size"),
             combo=("CONTAINER_STATUS", lambda s: int((s == "Combo").sum())),

@@ -35,7 +35,9 @@ from modules.charts import apply_glass_theme
 from modules.data_loader import baca_file, build_excel_data_only
 from modules.ui import (
     find_asset_file,
+    format_decimal,
     format_number,
+    format_percent,
     inject_css,
     inject_transition_script,
     render_artistic_hero,
@@ -109,7 +111,7 @@ def get_global_session_store() -> dict:
     return {}
 
 session_store = get_global_session_store()
-has_stored_session = session_store.get("hasil") is not None
+has_stored_session = session_store.get("file_bytes") is not None
 
 # ================================================================
 # LANGKAH 1 (ATAS): Unggah File Data Operasional
@@ -131,10 +133,11 @@ with st.container(border=True):
         if uploaded is None:
             if has_stored_session:
                 stored_fname = session_store.get("filename", "data_operasional.xlsx")
+                status_subtext = "Analisis dipulihkan otomatis" if session_store.get("hasil") is not None else "File siap dianalisis"
                 render_html(
                     f'<div class="session-restored-pill">'
                     f'<span class="session-restored-text">📂 <strong>Sesi Aktif:</strong> {stored_fname} &nbsp;•&nbsp; '
-                    f'<span style="color:#38bdf8;font-weight:600;">Analisis dipulihkan otomatis</span></span>'
+                    f'<span style="color:#38bdf8;font-weight:600;">{status_subtext}</span></span>'
                     f'</div>'
                 )
                 if st.button("✕ Reset & Unggah File Baru", key="btn_reset_session", help="Klik untuk mereset dan mengunggah file baru"):
@@ -144,7 +147,7 @@ with st.container(border=True):
             else:
                 render_html('<div class="step1-upload-hint">(Khusus format .xlsx &lt;200 MB)</div>')
 
-# Alur Penentuan Sumber Data: Dari file upload baru atau dari sesi tersimpan
+# Alur Penentuan Sumber Data: Dari file upload baru atau dari sesi tersimpan di server
 if uploaded is not None:
     uploaded_name = uploaded.name
     file_bytes = uploaded.getvalue()
@@ -158,13 +161,15 @@ if uploaded is not None:
     session_store["file_bytes"] = file_bytes
     session_store["file_sig"] = file_sig
 elif has_stored_session:
-    # Memulihkan data dari sesi aktif di memori server
+    # Memulihkan file dan hasil analisis dari memori server (mode semi-database)
     uploaded_name = session_store["filename"]
     file_bytes = session_store["file_bytes"]
     file_sig = session_store["file_sig"]
-    sheets = session_store["sheets"]
-    st.session_state["_cached_sheets"] = sheets
-    st.session_state["hasil"] = session_store["hasil"]
+    if "sheets" in session_store:
+        sheets = session_store["sheets"]
+        st.session_state["_cached_sheets"] = sheets
+    if "hasil" in session_store:
+        st.session_state["hasil"] = session_store["hasil"]
     st.session_state["_last_file_sig"] = file_sig
 else:
     # Belum ada file atau sesi tersimpan: Berhenti di Langkah 1
@@ -220,46 +225,34 @@ with st.container(border=True):
     render_template("step2_header.html")
 
     sheet_keys = list(sheets.keys())
-    default_sheet_idx = 0
-    if "step2_selected_sheet" in st.session_state and st.session_state["step2_selected_sheet"] in sheet_keys:
-        default_sheet_idx = sheet_keys.index(st.session_state["step2_selected_sheet"])
-    current_sheet_name = sheet_keys[default_sheet_idx]
+    sheet_name = sheet_keys[0]
+    raw = sheets[sheet_name]
 
-    # Reset rentang tanggal jika sheet berganti
-    if st.session_state.get("_last_selected_sheet") != current_sheet_name:
-        st.session_state["_last_selected_sheet"] = current_sheet_name
-        st.session_state.pop("step2_date_range_picker", None)
-        st.session_state.pop("_init_period_range", None)
-        st.session_state.pop("_init_period_label", None)
-
-    raw_sheet_candidate = sheets[current_sheet_name]
-
-    # Deteksi rentang tanggal dari sheet terpilih
-    cand_cols = list(raw_sheet_candidate.columns)
+    # Deteksi rentang tanggal dari data sheet
+    cand_cols = list(raw.columns)
     ts_g_cand_idx = guess(cand_cols, ["disc_load", "disc_loading", "waktu", "time", "date"])
     ts_g_col_cand = cand_cols[ts_g_cand_idx]
-    raw_dummy_ts = pd.DataFrame({"START_TS": raw_sheet_candidate[ts_g_col_cand]})
+    raw_dummy_ts = pd.DataFrame({"START_TS": raw[ts_g_col_cand]})
     _, _, _, step2_min_d, step2_max_d = extract_period_options_from_events(raw_dummy_ts)
 
     # ----------------------------------------------------------------
     # Filter Periode Data Operasional yang Mau Ditampilkan (Datepicker)
-    # Diletakkan di atas filter pilih sheet
     # ----------------------------------------------------------------
     if not step2_min_d or not step2_max_d:
-        st.info(f"📅 Menampilkan seluruh data ({len(raw_sheet_candidate):,} baris kontainer)")
+        st.info(f"📅 Menampilkan seluruh data ({format_number(len(raw))} baris kontainer)")
         st.session_state["_init_period_range"] = None
         st.session_state["_init_period_label"] = "Semua Tanggal Data"
     else:
         default_range = (step2_min_d, step2_max_d)
 
         step2_date_val = st.date_input(
-            "Filter Rentang Tanggal Operasional (Mulai - Selesai):",
+            "Rentang Tanggal (Mulai - Selesai):",
             value=default_range,
             min_value=step2_min_d,
             max_value=step2_max_d,
             format="DD/MM/YYYY",
             key="step2_date_range_picker",
-            help="Klik input untuk membuka kalender. Pilih tanggal mulai dan tanggal selesai bebas tanpa batasan. Hanya tanggal di dalam file Excel yang dapat dipilih.",
+            help="Pilih rentang tanggal yang ingin dianalisis",
         )
 
         if isinstance(step2_date_val, (tuple, list)):
@@ -267,14 +260,9 @@ with st.container(border=True):
                 r_start, r_end = step2_date_val
                 if r_start > r_end:
                     r_start, r_end = r_end, r_start
-                is_full_range = (r_start == step2_min_d and r_end == step2_max_d)
-                if is_full_range:
-                    lbl = f"({step2_min_d.strftime('%d/%m/%Y')}) - ({step2_max_d.strftime('%d/%m/%Y')})"
-                    rng = None
-                else:
-                    n_days = (r_end - r_start).days + 1
-                    lbl = f"({r_start.strftime('%d/%m/%Y')}) - ({r_end.strftime('%d/%m/%Y')}) ({n_days} Hari)"
-                    rng = (r_start, r_end)
+                n_days = (r_end - r_start).days + 1
+                lbl = f"({r_start.strftime('%d/%m/%Y')}) - ({r_end.strftime('%d/%m/%Y')}) ({format_number(n_days)} Hari)"
+                rng = (r_start, r_end)
 
                 st.session_state["_init_period_range"] = rng
                 st.session_state["_init_period_label"] = lbl
@@ -288,15 +276,6 @@ with st.container(border=True):
             st.session_state["_init_period_range"] = (r_single, r_single)
             st.session_state["_init_period_label"] = f"({r_single.strftime('%d/%m/%Y')}) (1 Hari)"
 
-    # Pemilihan Sheet Data Operasional (di bawah filter rentang tanggal)
-    sheet_name = st.selectbox(
-        "Pilih sheet data operasional:",
-        sheet_keys,
-        index=default_sheet_idx,
-        key="step2_selected_sheet",
-    )
-    raw = sheets[sheet_name]
-
     # Baris 2: 3 Kolom Parameter Ambang Batas Berjejer Horizontal
     th1, th2, th3 = st.columns([1, 1, 1], gap="medium")
     with th1:
@@ -304,30 +283,27 @@ with st.container(border=True):
             "Ambang Combo (menit)",
             min_value=1,
             value=AMBANG_COMBO_MENIT_DEFAULT,
-            step=5,
-            help="Jarak waktu maksimum antar 2 baris size 20ft, truk & aktivitas sama, supaya dianggap 'Combo'.",
+            step=1,
+            help="Selisih waktu 2 container 20ft pada truk dan aktivitas yang sama",
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
-            'Maks. gap antar 2 baris 20ft (truk &amp; aktivitas sama)</div>'
+            'Gap 2 container 20ft pada truk yang sama</div>'
         )
 
     with th2:
         ambang_dual = st.number_input(
-            "Ambang Dual Cycle (menit)",
+            "Parameter Dual Cycle (menit)",
             min_value=1,
             value=AMBANG_DUAL_MENIT_DEFAULT,
             step=10,
             help=(
-                "Jarak waktu maksimum antar 2 event beda aktivitas (LOAD vs DISC) dalam truk yang sama. "
-                "Jika DISC dulu lalu LOAD, gap diukur di lapangan (selesai stack DISC sampai mulai "
-                "unstack LOAD). Jika LOAD dulu lalu DISC, gap diukur di dermaga (selesai muat LOAD "
-                "sampai mulai bongkar DISC)."
+                "Selisih waktu konfirmasi truk mendapatkan muatan, baik di lapangan atau dermaga"
             ),
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
-            'Maks. gap antar event DISC &amp; LOAD (truk sama): lapangan jika DISC dulu, dermaga jika LOAD dulu</div>'
+            'Waktu konfirmasi angkat dan angkut kontainer di truk</div>'
         )
 
     with th3:
@@ -337,16 +313,12 @@ with st.container(border=True):
             value=AMBANG_TWINLIFT_MENIT_DEFAULT,
             step=1,
             help=(
-                "Jarak waktu maksimum DISC_LOAD_TS antar 2 kontainer dalam 1 Combo 20ft "
-                "pada kegiatan di dermaga, baik bongkar (DISC) maupun muat (LOAD), "
-                "yang berasal dari kapal (VES_ID), truk, & Crane (QC) yang sama, "
-                "supaya dianggap 'Twinlift'. Hanya crane kade internasional (ID berakhiran 'I') "
-                "yang bisa Twinlift; crane kade domestik (berakhiran 'D') selalu bukan Twinlift."
+                "Selisih waktu konfirmasi 2 kontainer dalam 1 aktivitas"
             ),
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
-            'Maks. gap waktu angkat 2 kontainer Combo 20ft (DISC &amp; LOAD, crane kade internasional sama)</div>'
+            'Gap waktu konfirmasi 2 kontainer 20ft</div>'
         )
 
     # Pemetaan Kolom Otomatis
@@ -373,28 +345,23 @@ with st.container(border=True):
     else:
         col_map["crane"] = None
 
-    # Peringatan jika hasil analisis sebelumnya sudah usang
+    # Validasi integritas cache hasil analisis jika ada
+    CALC_VERSION = "v1.2_dual_round"
+    auto_recompute = False
     if "hasil" in st.session_state:
-        _cached_summary = st.session_state["hasil"].get("summary", {})
         _cached_out_df = st.session_state["hasil"].get("out_df")
-        if (
-            "total_bukan_twinlift_kontainer" not in _cached_summary
-            or "monthly_20ft" not in _cached_summary
-            or "aturan_twinlift_crane" not in _cached_summary
-            or _cached_out_df is None
-            or "DUAL_SELISIH_AMBANG_MENIT" not in _cached_out_df.columns
-        ):
+        if _cached_out_df is None or st.session_state.get("_calc_ver") != CALC_VERSION:
             st.session_state.pop("hasil", None)
-            st.warning(
-                "Hasil analisis sebelumnya sudah usang. "
-                "Silakan klik tombol di bawah untuk menjalankan ulang analisis."
-            )
+            session_store.pop("hasil", None)
+            auto_recompute = True
 
     # Tombol Eksekusi di Bagian Paling Bawah Container Langkah 2 (Ukuran Ringkas & Center)
     render_html('<div style="height:6px;"></div>')
     b_col1, b_col2, b_col3 = st.columns([1.4, 1.2, 1.4])
     with b_col2:
-        run = st.button("Jalankan Komputasi Analisis", type="primary", use_container_width=True)
+        run = st.button("Jalankan Analisis", type="primary", use_container_width=True)
+    if auto_recompute:
+        run = True
 
 # Jika belum dijalankan dan belum ada hasil: Berhenti di sini
 if not run and "hasil" not in st.session_state:
@@ -423,7 +390,10 @@ if run:
         if init_range is not None:
             r_start, r_end = init_range
             ts_col = col_map["ts_g"]
-            ts_series = pd.to_datetime(raw_to_process[ts_col], errors="coerce")
+            ts_series = pd.to_datetime(raw_to_process[ts_col], errors="coerce", dayfirst=True)
+            if ts_series.isna().any() and col_map.get("ts_h"):
+                ts_h_series = pd.to_datetime(raw_to_process[col_map["ts_h"]], errors="coerce", dayfirst=True)
+                ts_series = ts_series.fillna(ts_h_series)
             start_dt = pd.to_datetime(r_start)
             end_dt = pd.to_datetime(r_end) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
             date_mask = (ts_series >= start_dt) & (ts_series <= end_dt)
@@ -480,6 +450,7 @@ if run:
         ambang_twinlift,
         st.session_state.get("_init_period_range"),
     )
+    st.session_state["_calc_ver"] = CALC_VERSION
 
     # Simpan hasil komputasi ke session_store server agar persisten terhadap refresh browser (F5)
     session_store["hasil"] = st.session_state["hasil"]
@@ -565,7 +536,7 @@ with st.container(border=True):
                 names="Status",
                 values="Jumlah",
                 hole=0.52,
-                title="Dual Cycle vs Non Dual (berbasis Event)",
+                title="Dual Cycle vs Non Dual",
                 color="Status",
                 color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
                 custom_data=["Status"],
@@ -576,7 +547,7 @@ with st.container(border=True):
                 insidetextorientation="horizontal",
                 textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                 marker=dict(line=dict(color="#ffffff", width=2)),
-                hovertemplate="<b>%{label}</b><br>Jumlah: %{value:,} event (%{percent})<extra></extra>",
+                hovertemplate="<b>%{label}</b><br>Jumlah: %{value:,.0f} ritase (%{percent})<extra></extra>",
             )
             apply_glass_theme(fig_pie)
             fig_pie.update_layout(
@@ -599,7 +570,7 @@ with st.container(border=True):
             )
 
             # Tombol aksi langsung untuk membuka rincian modal
-            col_b1, col_b2 = st.columns(2)
+            col_b1, col_b2, col_b3 = st.columns(3)
             with col_b1:
                 if st.button("🔍 Rincian Dual Cycle", use_container_width=True, key="btn_quick_dual_detail"):
                     st.session_state["modal_activity_status"] = "Dual Cycle"
@@ -609,6 +580,12 @@ with st.container(border=True):
             with col_b2:
                 if st.button("🔍 Rincian Non Dual", use_container_width=True, key="btn_quick_non_dual_detail"):
                     st.session_state["modal_activity_status"] = "Non Dual"
+                    st.session_state["show_activity_modal"] = True
+                    st.rerun()
+
+            with col_b3:
+                if st.button("⚠️ Rincian Issue", use_container_width=True, key="btn_quick_issue_detail", help="Lihat Gap 0 menit (human error) dan potensi dual cycle dengan gap berlebih"):
+                    st.session_state["modal_activity_status"] = "Issue"
                     st.session_state["show_activity_modal"] = True
                     st.rerun()
 
@@ -633,7 +610,7 @@ with st.container(border=True):
                     names="Status",
                     values="Jumlah",
                     hole=0.52,
-                    title="Combo vs Single (Basis Kontainer 20ft)",
+                    title="Combo vs Single (Kontainer 20ft)",
                     color="Status",
                     color_discrete_map={"Combo": "#0EA5E9", "Single": "#64748B"},
                 )
@@ -643,6 +620,7 @@ with st.container(border=True):
                     insidetextorientation="horizontal",
                     textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                     marker=dict(line=dict(color="#ffffff", width=2)),
+                    hovertemplate="<b>%{label}</b><br>Jumlah: %{value:,.0f} kontainer (%{percent})<extra></extra>",
                 )
                 apply_glass_theme(fig_combo20)
                 fig_combo20.update_layout(
@@ -671,6 +649,7 @@ with st.container(border=True):
                 {"pct_dual": "Dual Cycle", "pct_non_dual": "Non Dual"}
             )
             monthly_dual_pct["Persentase"] = monthly_dual_pct["Persentase"] * 100
+            monthly_dual_pct["Label"] = monthly_dual_pct["Persentase"].apply(lambda p: format_percent(p, 1))
 
             fig_month_dual = px.bar(
                 monthly_dual_pct,
@@ -680,9 +659,13 @@ with st.container(border=True):
                 barmode="stack",
                 title="Breakdown Bulanan: Dual Cycle vs Non Dual (%)",
                 color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
-                text_auto=".1f",
+                text="Label",
             )
-            fig_month_dual.update_layout(yaxis=dict(title="% dari Total Event", range=[0, 100]))
+            fig_month_dual.update_traces(textposition="inside", insidetextanchor="middle")
+            fig_month_dual.update_layout(
+                xaxis=dict(type="category"),
+                yaxis=dict(title="% dari Total Ritase", range=[0, 100]),
+            )
             apply_glass_theme(fig_month_dual)
             st.plotly_chart(fig_month_dual, width="stretch")
 
@@ -699,6 +682,7 @@ with st.container(border=True):
                 {"pct_combo": "Combo", "pct_single": "Single"}
             )
             monthly_container_pct["Persentase"] = monthly_container_pct["Persentase"] * 100
+            monthly_container_pct["Label"] = monthly_container_pct["Persentase"].apply(lambda p: format_percent(p, 1))
 
             fig_month_container = px.bar(
                 monthly_container_pct,
@@ -708,9 +692,13 @@ with st.container(border=True):
                 barmode="stack",
                 title="Breakdown Bulanan: Combo vs Single (% dari Kontainer 20ft)",
                 color_discrete_map={"Combo": "#0EA5E9", "Single": "#64748B"},
-                text_auto=".1f",
+                text="Label",
             )
-            fig_month_container.update_layout(yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]))
+            fig_month_container.update_traces(textposition="inside", insidetextanchor="middle")
+            fig_month_container.update_layout(
+                xaxis=dict(type="category"),
+                yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]),
+            )
             apply_glass_theme(fig_month_container)
             st.plotly_chart(fig_month_container, width="stretch")
         else:
@@ -720,8 +708,6 @@ with st.container(border=True):
         # Breakdown Dual Cycle: Per Shift
         # --------------------------------------------------------
         render_html('<div style="height:8px;"></div>')
-        st.markdown("##### Breakdown Dual Cycle per Shift")
-
         shift_df = summary["shift"]
 
         # --- Chart 1: Dual vs Non Dual per Shift (jumlah + persentase) ---
@@ -740,7 +726,10 @@ with st.container(border=True):
                 shift_pct["Total_Shift"] > 0, shift_pct["Jumlah"] / shift_pct["Total_Shift"] * 100, 0
             )
             shift_pct["Label"] = (
-                shift_pct["Jumlah"].apply(format_number) + " (" + shift_pct["Persen"].round(1).astype(str) + "%)"
+                shift_pct["Jumlah"].apply(format_number)
+                + " ("
+                + shift_pct["Persen"].apply(lambda p: format_percent(p, 1))
+                + ")"
             )
 
             fig_shift = px.bar(
@@ -754,7 +743,7 @@ with st.container(border=True):
                 text="Label",
             )
             fig_shift.update_traces(textposition="inside", insidetextanchor="middle")
-            fig_shift.update_layout(xaxis=dict(title=""), yaxis=dict(title="Jumlah Event"))
+            fig_shift.update_layout(xaxis=dict(title=""), yaxis=dict(title="Jumlah Ritase"))
             apply_glass_theme(fig_shift)
             st.plotly_chart(fig_shift, width="stretch")
         else:
@@ -781,13 +770,13 @@ with st.container(border=True):
                 format_number(summary["container_total"]),
                 subtext="Semua Ukuran",
                 variant="purple",
-                tooltip="Total seluruh kontainer dari semua ukuran (20ft, 40ft, 45ft) yang dianalisis dalam data operasional.",
+                tooltip="Total seluruh kontainer dari semua ukuran (20ft, 40ft, 45ft).",
             )
         with t2:
             render_kpi_card(
                 "Jumlah 20ft",
                 format_number(total_kontainer_20ft),
-                subtext=f"{summary['pct_20ft_of_total'] * 100:.1f}% dari Total Kontainer",
+                subtext=f"{format_percent(summary['pct_20ft_of_total'] * 100)} dari Total Kontainer",
                 variant="amber",
                 tooltip="Jumlah kontainer berukuran 20 kaki (20ft), satu-satunya ukuran yang dapat dioperasikan secara twinlift.",
             )
@@ -810,7 +799,7 @@ with st.container(border=True):
         with t5:
             render_kpi_card(
                 "% Twinlift",
-                f"{pct_twinlift_20ft_val:.1f}%",
+                format_percent(pct_twinlift_20ft_val),
                 subtext="Basis Kontainer 20ft",
                 variant="blue",
                 tooltip="Persentase kontainer 20ft yang beroperasi secara twinlift terhadap total kontainer 20ft (Twinlift ÷ Total 20ft × 100%).",
@@ -842,6 +831,7 @@ with st.container(border=True):
                     insidetextorientation="horizontal",
                     textfont=dict(family="Plus Jakarta Sans", size=12, color="#ffffff"),
                     marker=dict(line=dict(color="#ffffff", width=2)),
+                    hovertemplate="<b>%{label}</b><br>Jumlah: %{value:,.0f} kontainer (%{percent})<extra></extra>",
                 )
                 apply_glass_theme(fig_twin_pie)
                 fig_twin_pie.update_layout(
@@ -885,6 +875,7 @@ with st.container(border=True):
                     {"pct_twinlift": "Twinlift", "pct_bukan_twinlift": "Bukan Twinlift"}
                 )
                 monthly_twin_pct["Persentase"] = monthly_twin_pct["Persentase"] * 100
+                monthly_twin_pct["Label"] = monthly_twin_pct["Persentase"].apply(lambda p: format_percent(p, 1))
 
                 fig_month_twin = px.bar(
                     monthly_twin_pct,
@@ -894,9 +885,13 @@ with st.container(border=True):
                     barmode="stack",
                     title="Breakdown Bulanan: Twinlift vs Bukan Twinlift (% dari Kontainer 20ft)",
                     color_discrete_map={"Twinlift": "#0284C7", "Bukan Twinlift": "#94A3B8"},
-                    text_auto=".1f",
+                    text="Label",
                 )
-                fig_month_twin.update_layout(yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]))
+                fig_month_twin.update_traces(textposition="inside", insidetextanchor="middle")
+                fig_month_twin.update_layout(
+                    xaxis=dict(type="category"),
+                    yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]),
+                )
                 apply_glass_theme(fig_month_twin)
                 st.plotly_chart(fig_month_twin, width="stretch")
             else:
@@ -947,7 +942,7 @@ with st.container(border=True):
                 crane_chart_df = (
                     crane_perf_valid.sort_values("pct_twinlift_dari_20ft", ascending=False).head(top_n).copy()
                 )
-                crane_chart_df["% Twinlift"] = (crane_chart_df["pct_twinlift_dari_20ft"] * 100).round(1)
+                crane_chart_df["Label_Twin"] = (crane_chart_df["pct_twinlift_dari_20ft"] * 100).apply(lambda p: format_percent(p, 1))
 
                 fig_crane = px.bar(
                     crane_chart_df.sort_values("pct_twinlift_dari_20ft"),
@@ -955,13 +950,13 @@ with st.container(border=True):
                     y="CRANE_ID",
                     orientation="h",
                     title=f"Top {top_n} Crane Berdasarkan % Twinlift (dari 20ft)",
-                    text="% Twinlift",
+                    text="Label_Twin",
                     color="pct_twinlift_dari_20ft",
                     color_continuous_scale=["#94A3B8", "#0284C7"],
                 )
-                fig_crane.update_traces(texttemplate="%{text}%", textposition="outside", cliponaxis=False)
+                fig_crane.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
                 fig_crane.update_layout(
-                    xaxis=dict(title="% Twinlift (dari 20ft)", tickformat=".0%", range=[0, 1.12]),
+                    xaxis=dict(title="% Twinlift (dari 20ft)", tickformat=".0%", range=[0, 1.15]),
                     yaxis=dict(title=""),
                     coloraxis_showscale=False,
                 )
@@ -976,8 +971,11 @@ with st.container(border=True):
                         "total_twinlift": "Twinlift",
                     }
                 ).copy()
-                crane_disp["% Twinlift (dari 20ft)"] = (crane_disp["pct_twinlift_dari_20ft"] * 100).round(1)
-                crane_disp["% Twinlift (dari Total)"] = (crane_disp["pct_twinlift_dari_total"] * 100).round(1)
+                crane_disp["Total Kontainer"] = crane_disp["Total Kontainer"].apply(format_number)
+                crane_disp["Total 20ft"] = crane_disp["Total 20ft"].apply(format_number)
+                crane_disp["Twinlift"] = crane_disp["Twinlift"].apply(format_number)
+                crane_disp["% Twinlift (dari 20ft)"] = (crane_disp["pct_twinlift_dari_20ft"] * 100).apply(lambda x: format_percent(x, 1))
+                crane_disp["% Twinlift (dari Total)"] = (crane_disp["pct_twinlift_dari_total"] * 100).apply(lambda x: format_percent(x, 1))
                 st.dataframe(
                     crane_disp[
                         [
