@@ -1024,13 +1024,27 @@ with st.container(border=True):
     # TAB 3: DOWNLOAD HASIL ANALISIS
     # ----------------------------------------------------------------
     with tab_download:
-        st.dataframe(out_df.head(1000), use_container_width=True, height=400)
+        cols_to_exclude = [
+            "TWINLIFT_GAP_MENIT",
+            "DUAL_PAIR_ID",
+            "DUAL_JENIS",
+            "DUAL_PASANGAN_EVENT_ID",
+            "DUAL_URUTAN",
+            "DUAL_GAP_LOKASI",
+            "DUAL_GAP_MENIT",
+            "DUAL_AMBANG_MENIT",
+            "DUAL_SELISIH_AMBANG_MENIT",
+            "DUAL_IS_FAST",
+        ]
+        df_download = out_df.drop(columns=[c for c in cols_to_exclude if c in out_df.columns], errors="ignore")
+        st.dataframe(df_download.head(1000), use_container_width=True, height=400)
 
         hasil_sig = (
             hasil["ambang_combo"],
             hasil["ambang_dual"],
             hasil["ambang_twinlift"],
             len(out_df),
+            len(df_download.columns),
         )
         if st.session_state.get("_download_sig") != hasil_sig:
             st.session_state.pop("_excel_bytes", None)
@@ -1051,7 +1065,7 @@ with st.container(border=True):
             if st.button("Download Hasil Analisis (.xlsx)", use_container_width=True):
                 with st.spinner("Menyiapkan file Excel (mohon tunggu)..."):
                     try:
-                        st.session_state["_excel_bytes"] = build_excel_data_only(out_df)
+                        st.session_state["_excel_bytes"] = build_excel_data_only(df_download)
                         st.session_state["_excel_sig"] = hasil_sig
                         st.rerun()
                     except Exception as err:
