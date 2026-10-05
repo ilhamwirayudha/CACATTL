@@ -585,7 +585,7 @@ with st.container(border=True):
                     st.rerun()
 
             with col_b3:
-                if st.button("⚠️ Rincian Issue", use_container_width=True, key="btn_quick_issue_detail", help="Lihat Gap 0 menit (human error) dan potensi dual cycle dengan gap berlebih"):
+                if st.button("🚛 Potensi Dual Cycle", use_container_width=True, key="btn_quick_issue_detail", help="Lihat ritase potensi dual cycle dengan jeda waktu melebihi ambang batas"):
                     st.session_state["modal_activity_status"] = "Issue"
                     st.session_state["show_activity_modal"] = True
                     st.rerun()
@@ -652,7 +652,7 @@ with st.container(border=True):
                         st.rerun()
 
                 with col_cb3:
-                    if st.button("⚠️ Rincian Issue", use_container_width=True, key="btn_quick_combo_issue_detail", help="Lihat Gap 0 menit dan potensi Combo dengan jeda waktu melebihi ambang batas"):
+                    if st.button("📦 Potensi Combo", use_container_width=True, key="btn_quick_combo_issue_detail", help="Lihat pasangan kontainer 20ft potensi Combo dengan jeda waktu melebihi ambang batas"):
                         st.session_state["modal_combo_status"] = "Issue"
                         st.session_state["show_combo_modal"] = True
                         st.rerun()
@@ -904,6 +904,10 @@ with st.container(border=True):
                 monthly_twin_pct["Persentase"] = monthly_twin_pct["Persentase"] * 100
                 monthly_twin_pct["Label"] = monthly_twin_pct["Persentase"].apply(lambda p: format_percent(p, 1))
 
+                # Format sumbu X dari 'YYYY-MM' (contoh: '2026-01') menjadi 'YY-Mon' (contoh: '26-Jan', '26-Feb')
+                order_bulan_twin = [pd.to_datetime(b).strftime("%y-%b") for b in monthly_20ft["Bulan"].unique()]
+                monthly_twin_pct["Bulan"] = pd.to_datetime(monthly_twin_pct["Bulan"]).dt.strftime("%y-%b")
+
                 fig_month_twin = px.bar(
                     monthly_twin_pct,
                     x="Bulan",
@@ -912,11 +916,12 @@ with st.container(border=True):
                     barmode="stack",
                     title="Breakdown Bulanan: Twinlift vs Bukan Twinlift (% dari Kontainer 20ft)",
                     color_discrete_map={"Twinlift": "#0284C7", "Bukan Twinlift": "#94A3B8"},
+                    category_orders={"Bulan": order_bulan_twin},
                     text="Label",
                 )
                 fig_month_twin.update_traces(textposition="inside", insidetextanchor="middle")
                 fig_month_twin.update_layout(
-                    xaxis=dict(type="category"),
+                    xaxis=dict(type="category", categoryorder="array", categoryarray=order_bulan_twin),
                     yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]),
                 )
                 apply_glass_theme(fig_month_twin)
@@ -933,19 +938,7 @@ with st.container(border=True):
         # --------------------------------------------------------
         # Performa Crane (QC) dalam Twinlift — basis 20ft
         # --------------------------------------------------------
-        render_html('<div style="height:8px;"></div>')
-        st.markdown(
-            "##### Performa Crane (QC) dalam Twinlift",
-            help=(
-                "**Syarat Twinlift:** 2 kontainer 20ft dari kapal yang sama, diangkut truk yang sama, "
-                "DAN diangkat oleh Crane yang sama pada kegiatan di dermaga (bongkar DISC maupun "
-                "muat LOAD), dalam ambang waktu yang ditentukan.\n\n"
-                "Twinlift hanya bisa dilakukan crane kade internasional (ID berakhiran I); "
-                "crane kade domestik (berakhiran D) selalu 0%.\n\n"
-                "Persentase di bawah dihitung dari kontainer 20ft yang ditangani tiap crane, "
-                "bukan dari seluruh kontainer yang ditangani crane tersebut."
-            ),
-        )
+        render_html('<div style="height:12px;"></div>')
 
         crane_perf = summary["crane_performa"]
         crane_tidak_terpetakan = (
@@ -960,11 +953,12 @@ with st.container(border=True):
                 "Langkah 2, lalu jalankan ulang analisis."
             )
         else:
-            crane_perf_valid = crane_perf[crane_perf["total_20ft"] > 0].copy()
+            # Filter hanya crane yang memiliki aktivitas Twinlift (> 0) agar crane kade domestik (01D-05D) yang selalu 0% tidak memenuhi chart
+            crane_perf_valid = crane_perf[(crane_perf["total_20ft"] > 0) & (crane_perf["total_twinlift"] > 0)].copy()
             top_n = min(15, len(crane_perf_valid))
 
             if top_n == 0:
-                st.info("Tidak ada crane dengan kontainer 20ft pada data ini.")
+                st.info("Tidak ada crane dengan aktivitas Twinlift pada data ini.")
             else:
                 crane_chart_df = (
                     crane_perf_valid.sort_values("pct_twinlift_dari_20ft", ascending=False).head(top_n).copy()
@@ -990,7 +984,14 @@ with st.container(border=True):
                 apply_glass_theme(fig_crane)
                 st.plotly_chart(fig_crane, width="stretch")
 
-                crane_disp = crane_perf.rename(
+                render_html('<div style="height:12px;"></div>')
+                st.markdown(
+                    '<span style="font-size: 14px; font-weight: 700; color: #ffffff; font-family: \'Plus Jakarta Sans\', sans-serif; display: inline-block; margin-bottom: 6px;">Tabel Breakdown Performa Twinlift per Crane (QC)</span>',
+                    unsafe_allow_html=True,
+                )
+
+                crane_table_df = crane_perf[crane_perf["total_twinlift"] > 0].copy()
+                crane_disp = crane_table_df.rename(
                     columns={
                         "CRANE_ID": "Crane",
                         "total_kontainer": "Total Kontainer",
@@ -1016,7 +1017,7 @@ with st.container(border=True):
                     ],
                     use_container_width=True,
                     hide_index=True,
-                    height=320,
+                    height=240,
                 )
 
     # ----------------------------------------------------------------

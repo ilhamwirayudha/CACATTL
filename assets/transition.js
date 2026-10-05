@@ -111,7 +111,7 @@
                 win.__cacaModalProtectionInstalled = true;
 
                 function getActiveModal() {
-                    return doc.querySelector('div[role="dialog"][aria-modal="true"]') ||
+                    return doc.querySelector('div[role="dialog"]') ||
                            doc.querySelector('div[data-testid="stDialog"] div[role="dialog"]');
                 }
 
@@ -131,6 +131,19 @@
                 function blockOutsideClick(e) {
                     var modal = getActiveModal();
                     if (modal) {
+                        // Jangan blok klik pada dropdown popover / portal menu / selectbox BaseWeb
+                        if (e.target && e.target.closest && (
+                            e.target.closest('[data-baseweb="popover"]') ||
+                            e.target.closest('[data-baseweb="menu"]') ||
+                            e.target.closest('[role="listbox"]') ||
+                            e.target.closest('[role="option"]') ||
+                            e.target.closest('[data-baseweb="select"]') ||
+                            e.target.closest('[data-testid="stSelectboxVirtualDropdown"]') ||
+                            e.target.closest('[data-baseweb="portal"]') ||
+                            e.target.closest('[data-testid="stPortal"]')
+                        )) {
+                            return;
+                        }
                         // Jika target klik BUKAN di dalam modal dialog, cegah penutupan modal
                         if (!modal.contains(e.target)) {
                             e.stopImmediatePropagation();

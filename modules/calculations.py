@@ -334,6 +334,7 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
     dual_lokasi = np.array(["-"] * n, dtype=object)
     dual_gap = np.full(n, np.nan)
     dual_sisa = np.full(n, np.nan)
+    dual_is_fast = np.zeros(n, dtype=bool)
 
     pairs = []
     truck_positions = events.groupby("CAR_CHE_ID").indices
@@ -351,6 +352,7 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
 
                 gap_ab = (start[k] - end[i]) / np.timedelta64(1, "m")
                 gap_ba = (start[i] - end[k]) / np.timedelta64(1, "m")
+                is_fast = False
                 if gap_ab >= 0:
                     gap = gap_ab
                 elif gap_ba >= 0:
@@ -358,7 +360,9 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
                 else:
                     overlap = min(abs(gap_ab), abs(gap_ba))
                     if overlap <= 10.0 and start_diff <= ambang_dual + 60:
-                        gap = 0.0
+                        # Selisih waktu riil dari overlap pencatatan transisi (bukan dipaksa 0.0)
+                        gap = overlap
+                        is_fast = True
                     else:
                         continue
 
@@ -369,10 +373,10 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
                     continue
 
                 if activity[i] != activity[k]:
-                    pairs.append((i, k, gap))
+                    pairs.append((i, k, gap, is_fast))
 
     pairs.sort(key=lambda x: (x[2], x[0], x[1]))
-    for i, k, gap in pairs:
+    for i, k, gap, is_fast in pairs:
         if not assigned[i] and not assigned[k]:
             nxt_pair += 1
             status[i] = "Dual Cycle"
@@ -391,6 +395,7 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
                 dual_lokasi[idx] = lokasi
                 dual_gap[idx] = gap_r
                 dual_sisa[idx] = sisa
+                dual_is_fast[idx] = is_fast
 
     out = events.copy()
     out["STATUS"] = status
@@ -400,6 +405,7 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
     out["DUAL_GAP_MENIT"] = dual_gap
     out["DUAL_AMBANG_MENIT"] = np.where(pair_id > 0, float(ambang_dual), np.nan)
     out["DUAL_SELISIH_AMBANG_MENIT"] = dual_sisa
+    out["DUAL_IS_FAST"] = dual_is_fast
     return out
 
 
@@ -461,6 +467,7 @@ def gabungkan_hasil(df: pd.DataFrame, events: pd.DataFrame, event_id_map: dict) 
         # Blok informasi pasangan Dual Cycle (kosong / "-" untuk Non Dual)
         "DUAL_PAIR_ID", "DUAL_PASANGAN_EVENT_ID", "DUAL_URUTAN", "DUAL_GAP_LOKASI",
         "DUAL_GAP_MENIT", "DUAL_AMBANG_MENIT", "DUAL_SELISIH_AMBANG_MENIT",
+        "DUAL_IS_FAST",
     ]
     out = df.merge(events[cols_to_merge], on="GROUP_ID", how="left")
     out = out.drop(columns=["GROUP_ID", "ROW_IDX"])
