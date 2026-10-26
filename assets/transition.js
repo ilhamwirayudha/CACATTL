@@ -158,6 +158,122 @@
                 doc.addEventListener('pointerdown', blockOutsideClick, true);
             }
 
+            // Scroll Position Helpers & Persistence
+            win.getCurrentScrollY = function() {
+                var maxScroll = 0;
+                var candidates = [
+                    doc.querySelector('[data-testid="stMain"]'),
+                    doc.querySelector('section.main'),
+                    doc.querySelector('.main'),
+                    doc.querySelector('[data-testid="stAppViewContainer"]'),
+                    doc.documentElement,
+                    doc.body
+                ];
+                for (var i = 0; i < candidates.length; i++) {
+                    var el = candidates[i];
+                    if (el && el.scrollTop && el.scrollTop > maxScroll) {
+                        maxScroll = el.scrollTop;
+                    }
+                }
+                var winY = win.pageYOffset || win.scrollY || (doc.documentElement ? doc.documentElement.scrollTop : 0) || (doc.body ? doc.body.scrollTop : 0);
+                if (winY > maxScroll) maxScroll = winY;
+                return maxScroll;
+            };
+
+            win.scrollToY = function(targetY, behavior) {
+                var mode = behavior || 'instant';
+                var candidates = [
+                    doc.querySelector('[data-testid="stMain"]'),
+                    doc.querySelector('section.main'),
+                    doc.querySelector('.main'),
+                    doc.querySelector('[data-testid="stAppViewContainer"]'),
+                    doc.documentElement,
+                    doc.body
+                ];
+                for (var i = 0; i < candidates.length; i++) {
+                    var el = candidates[i];
+                    if (el && el.scrollHeight > el.clientHeight) {
+                        try {
+                            el.scrollTo({ top: targetY, behavior: mode });
+                        } catch(e) {
+                            try { el.scrollTop = targetY; } catch(err) {}
+                        }
+                    }
+                }
+                try {
+                    win.scrollTo({ top: targetY, behavior: mode });
+                } catch(e) {
+                    try { win.scrollTo(0, targetY); } catch(err) {}
+                }
+            };
+
+            win.restoreCacaScroll = function(behavior) {
+                var saved = 0;
+                try {
+                    saved = parseInt(sessionStorage.getItem('caca_scroll_pos') || '0', 10);
+                } catch(e) {}
+
+                if (saved > 120) {
+                    win.scrollToY(saved, behavior || 'instant');
+                } else {
+                    var marker = doc.getElementById('step3-card-marker') || doc.getElementById('langkah-3-anchor');
+                    if (marker) {
+                        try {
+                            marker.scrollIntoView({ behavior: behavior || 'instant', block: 'start' });
+                        } catch(e) {}
+                    }
+                }
+            };
+
+            // Simpan posisi scroll secara kontinu dan saat beforeunload
+            if (!win.__cacaScrollPersistenceInstalled) {
+                win.__cacaScrollPersistenceInstalled = true;
+
+                var saveScrollTimer = null;
+                function saveScrollPos() {
+                    clearTimeout(saveScrollTimer);
+                    saveScrollTimer = setTimeout(function() {
+                        var y = win.getCurrentScrollY ? win.getCurrentScrollY() : 0;
+                        if (y > 60) {
+                            try { sessionStorage.setItem('caca_scroll_pos', y); } catch(e) {}
+                        }
+                    }, 50);
+                }
+
+                win.addEventListener('scroll', saveScrollPos, { passive: true });
+                doc.addEventListener('scroll', saveScrollPos, { passive: true, capture: true });
+                win.addEventListener('beforeunload', function() {
+                    var y = win.getCurrentScrollY ? win.getCurrentScrollY() : 0;
+                    if (y > 60) {
+                        try { sessionStorage.setItem('caca_scroll_pos', y); } catch(e) {}
+                    }
+                });
+
+                var candidates = [
+                    doc.querySelector('[data-testid="stMain"]'),
+                    doc.querySelector('section.main'),
+                    doc.querySelector('.main'),
+                    doc.querySelector('[data-testid="stAppViewContainer"]')
+                ];
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i]) {
+                        candidates[i].addEventListener('scroll', saveScrollPos, { passive: true });
+                    }
+                }
+
+                // Pemulihan scroll otomatis saat awal dimuat (dengan retry interval bertahap)
+                var initialSaved = 0;
+                try { initialSaved = parseInt(sessionStorage.getItem('caca_scroll_pos') || '0', 10); } catch(e) {}
+                if (initialSaved > 120) {
+                    var retries = [150, 300, 600, 1000, 1500, 2200];
+                    retries.forEach(function(delay) {
+                        setTimeout(function() {
+                            win.restoreCacaScroll('instant');
+                        }, delay);
+                    });
+                }
+            }
+
         } catch (err) {
             console.error('CACA transition setup error:', err);
         }

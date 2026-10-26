@@ -3,7 +3,7 @@ CACA - Cycle Analysis & Cargo Accelaration Dashboard
 Pelindo Terminal Teluk Lamong
 
 Aplikasi analitis berbasis web untuk rekonstruksi siklus truk dermaga,
-evaluasi rasio Dual Cycle, utilisasi Twin Lift, serta agregasi produktivitas per kapal.
+Tab Simulasi: Simulasi efisiensi operasional Dual Cycle (Two-Way Load), eliminasi ritase kosong, dan penghematan BBM Solar.
 """
 
 import datetime
@@ -12,8 +12,19 @@ import time
 import numpy as np
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+
+# ----------------------------------------------------------------
+# Konfigurasi Halaman Streamlit (Wajib menjadi perintah Streamlit pertama)
+# ----------------------------------------------------------------
+st.set_page_config(
+    page_title="CACA - Dashboard Analisis Dual Cycle & Twin Lift | Pelindo TTL",
+    page_icon="🚢",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 import gc
 import modules.charts
@@ -42,6 +53,7 @@ from modules.ui import (
     inject_transition_script,
     render_artistic_hero,
     render_dual_cycle_kpi_section,
+    get_parameter_tooltip,
     render_html,
     render_hybrid_loading_indicator,
     render_kpi_card,
@@ -49,18 +61,6 @@ from modules.ui import (
     show_activity_detail_dialog,
     show_combo_detail_dialog,
     show_twinlift_detail_dialog,
-)
-
-
-
-# ----------------------------------------------------------------
-# Konfigurasi Halaman Streamlit
-# ----------------------------------------------------------------
-st.set_page_config(
-    page_title="CACA - Dashboard Analisis Dual Cycle & Twin Lift | Pelindo TTL",
-    page_icon="🚢",
-    layout="wide",
-    initial_sidebar_state="collapsed",
 )
 
 # ----------------------------------------------------------------
@@ -144,6 +144,7 @@ with st.container(border=True):
                 if st.button("✕ Reset & Unggah File Baru", key="btn_reset_session", help="Klik untuk mereset dan mengunggah file baru"):
                     session_store.clear()
                     st.session_state.clear()
+                    st.query_params.clear()
                     st.rerun()
             else:
                 render_html('<div class="step1-upload-hint">(Khusus format .xlsx &lt;200 MB)</div>')
@@ -171,7 +172,18 @@ elif has_stored_session:
         st.session_state["_cached_sheets"] = sheets
     if "hasil" in session_store:
         st.session_state["hasil"] = session_store["hasil"]
+        if "_ambang_terakhir" in session_store:
+            st.session_state["_ambang_terakhir"] = session_store["_ambang_terakhir"]
+        else:
+            h_saved = session_store["hasil"]
+            st.session_state["_ambang_terakhir"] = (
+                int(h_saved.get("ambang_combo", AMBANG_COMBO_MENIT_DEFAULT)),
+                int(h_saved.get("ambang_dual", AMBANG_DUAL_MENIT_DEFAULT)),
+                int(h_saved.get("ambang_twinlift", AMBANG_TWINLIFT_MENIT_DEFAULT)),
+                h_saved.get("period_range"),
+            )
     st.session_state["_last_file_sig"] = file_sig
+
 else:
     # Belum ada file atau sesi tersimpan: Berhenti di Langkah 1
     st.session_state.pop("hasil", None)
@@ -278,14 +290,18 @@ with st.container(border=True):
             st.session_state["_init_period_label"] = f"({r_single.strftime('%d/%m/%Y')}) (1 Hari)"
 
     # Baris 2: 3 Kolom Parameter Ambang Batas Berjejer Horizontal
+    def_combo = int(st.session_state.get("hasil", {}).get("ambang_combo", AMBANG_COMBO_MENIT_DEFAULT))
+    def_dual = int(st.session_state.get("hasil", {}).get("ambang_dual", AMBANG_DUAL_MENIT_DEFAULT))
+    def_twin = int(st.session_state.get("hasil", {}).get("ambang_twinlift", AMBANG_TWINLIFT_MENIT_DEFAULT))
+
     th1, th2, th3 = st.columns([1, 1, 1], gap="medium")
     with th1:
         ambang_combo = st.number_input(
             "Ambang Combo (menit)",
             min_value=1,
-            value=AMBANG_COMBO_MENIT_DEFAULT,
+            value=def_combo,
             step=1,
-            help="Selisih waktu 2 container 20ft pada truk dan aktivitas yang sama",
+            help=get_parameter_tooltip("combo"),
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
@@ -296,11 +312,9 @@ with st.container(border=True):
         ambang_dual = st.number_input(
             "Parameter Dual Cycle (menit)",
             min_value=1,
-            value=AMBANG_DUAL_MENIT_DEFAULT,
+            value=def_dual,
             step=10,
-            help=(
-                "Selisih waktu konfirmasi truk mendapatkan muatan, baik di lapangan atau dermaga"
-            ),
+            help=get_parameter_tooltip("dual_cycle"),
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
@@ -311,11 +325,9 @@ with st.container(border=True):
         ambang_twinlift = st.number_input(
             "Ambang Twinlift (menit)",
             min_value=1,
-            value=AMBANG_TWINLIFT_MENIT_DEFAULT,
+            value=def_twin,
             step=1,
-            help=(
-                "Selisih waktu konfirmasi 2 kontainer dalam 1 aktivitas"
-            ),
+            help=get_parameter_tooltip("twinlift"),
         )
         render_html(
             '<div class="step2-param-hint" style="font-size:0.75rem;color:#94a3b8;margin-top:-8px;line-height:1.35;margin-bottom:2px;">'
@@ -346,14 +358,27 @@ with st.container(border=True):
     else:
         col_map["crane"] = None
 
-    # Validasi integritas cache hasil analisis jika ada
-    CALC_VERSION = "v1.2_dual_round"
+    # Validasi integritas cache hasil analisis & deteksi perubahan parameter ambang
+    CALC_VERSION = "v1.4_simulasi_tab"
     auto_recompute = False
+
+    curr_params = (
+        int(ambang_combo),
+        int(ambang_dual),
+        int(ambang_twinlift),
+        st.session_state.get("_init_period_range"),
+    )
+
     if "hasil" in st.session_state:
         _cached_out_df = st.session_state["hasil"].get("out_df")
         if _cached_out_df is None or st.session_state.get("_calc_ver") != CALC_VERSION:
             st.session_state.pop("hasil", None)
             session_store.pop("hasil", None)
+            auto_recompute = True
+        elif (
+            st.session_state.get("_ambang_terakhir") is not None
+            and st.session_state.get("_ambang_terakhir") != curr_params
+        ):
             auto_recompute = True
 
     # Tombol Eksekusi di Bagian Paling Bawah Container Langkah 2 (Ukuran Ringkas & Center)
@@ -383,7 +408,9 @@ if run:
         )
 
     try:
-        on_calc_progress(6, "Memulai analisis...", "Inisialisasi pipeline komputasi")
+        status_msg = "Memperbarui analisis parameter..." if auto_recompute else "Memulai analisis..."
+        detail_msg = "Menghitung ulang data dengan parameter baru" if auto_recompute else "Inisialisasi pipeline komputasi"
+        on_calc_progress(6, status_msg, detail_msg)
 
         # Filter dataset mentah sebelum komputasi jika pengguna memilih rentang tanggal tertentu di Step 2
         raw_to_process = raw
@@ -445,20 +472,17 @@ if run:
         "period_label": st.session_state.get("_init_period_label", "Seluruh Data Excel"),
         "period_range": st.session_state.get("_init_period_range"),
     }
-    st.session_state["_ambang_terakhir"] = (
-        ambang_combo,
-        ambang_dual,
-        ambang_twinlift,
-        st.session_state.get("_init_period_range"),
-    )
+    st.session_state["_ambang_terakhir"] = curr_params
     st.session_state["_calc_ver"] = CALC_VERSION
 
     # Simpan hasil komputasi ke session_store server agar persisten terhadap refresh browser (F5)
     session_store["hasil"] = st.session_state["hasil"]
+    session_store["_ambang_terakhir"] = curr_params
     session_store["sheets"] = sheets
     session_store["filename"] = uploaded_name
     session_store["file_bytes"] = file_bytes
     session_store["file_sig"] = file_sig
+
 
 hasil = st.session_state["hasil"]
 out_df = hasil["out_df"]
@@ -480,49 +504,77 @@ with st.container(border=True):
     period_lbl = hasil.get("period_label", curr_label or "Seluruh Data Excel")
     render_template("step3_header.html", period_label=period_lbl)
 
-    # Smooth scroll otomatis menggeser halaman ke Langkah 3 saat komputasi selesai dijalankan
-    if run:
-        components.html(
-            """
-            <script>
-            (function() {
-                function doScroll() {
-                    try {
-                        var win = window.parent;
-                        if (win && win.triggerScrollToStep3) {
-                            win.triggerScrollToStep3();
-                        } else {
-                            var doc = window.parent.document;
-                            var t = doc.getElementById('step3-card-marker');
-                            if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                        }
-                    } catch(e) {}
-                }
-                doScroll();
-                setTimeout(doScroll, 100);
-                setTimeout(doScroll, 300);
-                setTimeout(doScroll, 600);
-            })();
-            </script>
-            """,
-            height=0,
-            width=0,
-        )
+    # Otomatis menggeser atau memulihkan posisi scroll ke Langkah 3 / posisi sebelumnya saat refresh atau komputasi
+    scroll_behavior = "smooth" if run else "instant"
+    components.html(
+        f"""
+        <script>
+        (function() {{
+            function doScrollRestore() {{
+                try {{
+                    var win = window.parent || window;
+                    if (win && win.restoreCacaScroll) {{
+                        win.restoreCacaScroll('{scroll_behavior}');
+                    }} else if (win && win.triggerScrollToStep3) {{
+                        win.triggerScrollToStep3();
+                    }}
+                }} catch(e) {{}}
+            }}
+            doScrollRestore();
+            setTimeout(doScrollRestore, 50);
+            setTimeout(doScrollRestore, 150);
+            setTimeout(doScrollRestore, 350);
+            setTimeout(doScrollRestore, 700);
+            setTimeout(doScrollRestore, 1200);
+        }})();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
     monthly = summary["monthly"].reset_index().rename(columns={"BULAN": "Bulan"})
     # Basis kontainer 20ft — dipakai untuk breakdown Combo/Single & Twinlift/Bukan
     # Twinlift, karena keduanya secara definisi cuma mungkin terjadi di 20ft.
     monthly_20ft = summary["monthly_20ft"].reset_index().rename(columns={"BULAN": "Bulan"})
 
-    # 3 Tab Hasil Analisis
-    tab_dual, tab_twinlift, tab_download = st.tabs(
-        ["Dual Cycle", "Twinlift", "Download Hasil Analisis"]
+    # 4 Tab Hasil Analisis: Dual Cycle, Twinlift, Simulasi, Download Hasil Analisis
+    TAB_OPTIONS = ["Dual Cycle", "Twinlift", "Simulasi", "Download Hasil Analisis"]
+
+    # Inisialisasi atau sinkronisasi tab aktif dari query parameter (agar persisten saat F5 / reload)
+    url_tab = st.query_params.get("tab")
+    if url_tab in TAB_OPTIONS:
+        if st.session_state.get("active_analysis_tab") != url_tab:
+            st.session_state["active_analysis_tab"] = url_tab
+    elif "active_analysis_tab" not in st.session_state:
+        st.session_state["active_analysis_tab"] = "Dual Cycle"
+
+    # Pastikan tab yang tersimpan valid
+    if st.session_state.get("active_analysis_tab") not in TAB_OPTIONS:
+        st.session_state["active_analysis_tab"] = "Dual Cycle"
+
+    def _on_tab_change():
+        new_tab = st.session_state.get("active_analysis_tab")
+        if new_tab in TAB_OPTIONS:
+            st.query_params["tab"] = new_tab
+
+    active_tab = st.radio(
+        "Pilih Tab Analisis",
+        options=TAB_OPTIONS,
+        horizontal=True,
+        key="active_analysis_tab",
+        on_change=_on_tab_change,
+        label_visibility="collapsed",
     )
+
+    # Pastikan URL query parameter selalu sinkron dengan tab aktif
+    if st.query_params.get("tab") != active_tab:
+        st.query_params["tab"] = active_tab
 
     # ----------------------------------------------------------------
     # TAB 1: DUAL CYCLE
     # ----------------------------------------------------------------
-    with tab_dual:
+    if active_tab == "Dual Cycle":
         # Mini Card KPI Interaktif (Default 5 kartu, klik Total Petikemas untuk menampilkan Container LOAD & DISC)
         render_dual_cycle_kpi_section(summary)
 
@@ -571,7 +623,7 @@ with st.container(border=True):
             )
 
             # Tombol aksi langsung untuk membuka rincian modal
-            col_b1, col_b2, col_b3 = st.columns(3)
+            col_b1, col_b2 = st.columns(2)
             with col_b1:
                 if st.button("🔍 Rincian Dual Cycle", use_container_width=True, key="btn_quick_dual_detail"):
                     st.session_state["modal_activity_status"] = "Dual Cycle"
@@ -581,12 +633,6 @@ with st.container(border=True):
             with col_b2:
                 if st.button("🔍 Rincian Non Dual", use_container_width=True, key="btn_quick_non_dual_detail"):
                     st.session_state["modal_activity_status"] = "Non Dual"
-                    st.session_state["show_activity_modal"] = True
-                    st.rerun()
-
-            with col_b3:
-                if st.button("🚛 Potensi Dual Cycle", use_container_width=True, key="btn_quick_issue_detail", help="Lihat ritase potensi dual cycle dengan jeda waktu melebihi ambang batas"):
-                    st.session_state["modal_activity_status"] = "Issue"
                     st.session_state["show_activity_modal"] = True
                     st.rerun()
 
@@ -638,7 +684,7 @@ with st.container(border=True):
                 st.plotly_chart(fig_combo20, use_container_width=True, key="donut_combo_single_chart")
 
                 # Tombol aksi langsung untuk membuka rincian modal Combo & Single
-                col_cb1, col_cb2, col_cb3 = st.columns(3)
+                col_cb1, col_cb2 = st.columns(2)
                 with col_cb1:
                     if st.button("🔍 Rincian Combo", use_container_width=True, key="btn_quick_combo_detail"):
                         st.session_state["modal_combo_status"] = "Combo"
@@ -651,12 +697,6 @@ with st.container(border=True):
                         st.session_state["show_combo_modal"] = True
                         st.rerun()
 
-                with col_cb3:
-                    if st.button("📦 Potensi Combo", use_container_width=True, key="btn_quick_combo_issue_detail", help="Lihat pasangan kontainer 20ft potensi Combo dengan jeda waktu melebihi ambang batas"):
-                        st.session_state["modal_combo_status"] = "Issue"
-                        st.session_state["show_combo_modal"] = True
-                        st.rerun()
-
                 # Tampilkan Pop-up Dialog Modal jika dipicu
                 if st.session_state.get("show_combo_modal") and st.session_state.get("modal_combo_status"):
                     status_to_open = st.session_state["modal_combo_status"]
@@ -666,6 +706,41 @@ with st.container(border=True):
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
         if len(monthly) > 0:
+            render_html(
+                """
+                <style>
+                div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) {
+                    margin-left: 14px !important;
+                    margin-top: 40px !important;
+                }
+                div[data-testid="stCheckbox"] {
+                    margin-left: 16px !important;
+                    margin-top: 62px !important;
+                }
+                </style>
+                <div style="height:36px; min-height:36px; line-height:36px; display:block; clear:both;">&nbsp;</div>
+                """
+            )
+            col_m_input, col_m_check, col_m_space = st.columns([0.75, 1.6, 3.65])
+            with col_m_input:
+                if "monthly_target_optimal_pct" not in st.session_state:
+                    st.session_state["monthly_target_optimal_pct"] = 50.0
+                target_optimal_pct = st.number_input(
+                    "Target Optimal (%)",
+                    min_value=0.0,
+                    max_value=100.0,
+                    step=0.5,
+                    format="%.1f",
+                    key="monthly_target_optimal_pct",
+                    disabled=not st.session_state.get("show_monthly_target_line", True),
+                )
+            with col_m_check:
+                show_target_line = st.checkbox(
+                    "Tampilkan Garis Target",
+                    value=st.session_state.get("show_monthly_target_line", True),
+                    key="show_monthly_target_line",
+                )
+
             monthly_dual_pct = monthly.melt(
                 id_vars="Bulan",
                 value_vars=["pct_dual", "pct_non_dual"],
@@ -693,6 +768,23 @@ with st.container(border=True):
                 xaxis=dict(type="category"),
                 yaxis=dict(title="% dari Total Ritase", range=[0, 100]),
             )
+
+            # Garis batas merah target optimal melintang dari kiri ke kanan jika checklist aktif & target ditentukan (> 0)
+            if show_target_line and target_optimal_pct is not None and target_optimal_pct > 0:
+                fig_month_dual.add_hline(
+                    y=target_optimal_pct,
+                    layer="above",
+                    line_dash="dash",
+                    line_color="#EF4444",
+                    line_width=2.5,
+                    annotation_text=f"Target: {target_optimal_pct:g}%",
+                    annotation_position="top left",
+                    annotation_font=dict(family="Plus Jakarta Sans", size=11, color="#ffffff"),
+                    annotation_bgcolor="rgba(239, 68, 68, 0.85)",
+                    annotation_bordercolor="rgba(239, 68, 68, 1.0)",
+                    annotation_borderwidth=1,
+                )
+
             apply_glass_theme(fig_month_dual)
             st.plotly_chart(fig_month_dual, width="stretch")
 
@@ -779,7 +871,7 @@ with st.container(border=True):
     # ----------------------------------------------------------------
     # TAB 2: TWINLIFT
     # ----------------------------------------------------------------
-    with tab_twinlift:
+    elif active_tab == "Twinlift":
         # FIX LOGIKA: info "Total Event"/ritase dihapus dari tab ini karena
         # tidak ada hubungannya dengan Twinlift (Twinlift adalah properti
         # per-kontainer, bukan per-ritase truk). Yang relevan cukup: jumlah
@@ -1021,9 +1113,396 @@ with st.container(border=True):
                 )
 
     # ----------------------------------------------------------------
-    # TAB 3: DOWNLOAD HASIL ANALISIS
+    # TAB 3: SIMULASI POTENSI
     # ----------------------------------------------------------------
-    with tab_download:
+    elif active_tab == "Simulasi":
+        # --------------------------------------------------------
+        # Ambil Ground Truth 100% dari File Terupload yang Dianalisis
+        # --------------------------------------------------------
+        act_dual_count = int(summary.get("total_dual", 0))
+        act_single_count = int(summary.get("total_single", 0))
+        act_total_ritase = act_dual_count + act_single_count
+        act_pct_dual = (act_dual_count / act_total_ritase * 100.0) if act_total_ritase > 0 else 50.0
+        act_pct_non_dual = 100.0 - act_pct_dual
+
+        default_baseline_ritase = act_total_ritase if act_total_ritase > 0 else 659
+
+        # Panel Parameter Interaktif (Ukuran Input Field & Judul Terposisi Simetris)
+        col_f1, col_f2, col_f3 = st.columns(3, gap="medium")
+        with col_f1:
+            st.markdown(
+                '<div style="font-size: 0.92rem; font-weight: 700; color: #38bdf8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">'
+                '<span>⚙️</span> Parameter Asumsi BBM & Biaya'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            bbm_per_rit_input = st.number_input(
+                "Rata-rata BBM (L/Rit)",
+                min_value=0.10,
+                max_value=25.00,
+                value=3.52,
+                step=0.05,
+                format="%.2f",
+                key="sim_bbm_per_rit",
+                help="Konsumsi rata-rata bahan bakar per ritase truk (acuan baseline: 2.322,3 Liter / 659 Rit = 3,52 L/Rit).",
+            )
+            render_html(
+                '<div class="step2-param-hint" style="font-size:0.72rem;color:#94a3b8;margin-top:-6px;line-height:1.3;">'
+                'Konsumsi solar truk</div>'
+            )
+
+        with col_f2:
+            st.markdown(
+                '<div style="font-size: 0.92rem; font-weight: 700; color: transparent; margin-bottom: 8px; user-select: none;">'
+                '&nbsp;'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            harga_solar_input = st.number_input(
+                "Harga Solar (Rp/L)",
+                min_value=5000,
+                max_value=50000,
+                value=15000,
+                step=500,
+                format="%d",
+                key="sim_harga_solar",
+                help="Estimasi harga solar industri operasional per liter untuk perhitungan dampak finansial.",
+            )
+            render_html(
+                '<div class="step2-param-hint" style="font-size:0.72rem;color:#94a3b8;margin-top:-6px;line-height:1.3;">'
+                'Tarif per liter BBM</div>'
+            )
+
+        with col_f3:
+            st.markdown(
+                '<div style="font-size: 0.92rem; font-weight: 700; color: #38bdf8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">'
+                '<span>🎯</span> Target Penetrasi Dual Cycle'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            # Sinkronisasi nilai default isian ketik dengan data file yang sedang aktif dianalisis
+            current_file_key = f"{act_total_ritase}_{act_dual_count}_{act_single_count}"
+            if st.session_state.get("sim_synced_file_key") != current_file_key:
+                st.session_state["sim_synced_file_key"] = current_file_key
+                st.session_state["sim_penetrasi_input"] = float(round(act_pct_dual, 1))
+
+            def_penetrasi = float(st.session_state.get("sim_penetrasi_input", round(act_pct_dual, 1)))
+            def_penetrasi = max(0.0, min(100.0, def_penetrasi))
+
+            sim_penetrasi_pct = st.number_input(
+                "Target Penetrasi (%)",
+                min_value=0.0,
+                max_value=100.0,
+                value=def_penetrasi,
+                step=0.1,
+                format="%.1f",
+                key="sim_penetrasi_input",
+                help=f"Ketikkan persentase target Dual Cycle yang ingin disimulasikan (kondisi aktual file: {act_pct_dual:.1f}% / {format_number(act_dual_count)} rit).",
+            )
+            render_html(
+                f'<div class="step2-param-hint" style="font-size:0.72rem;color:#94a3b8;margin-top:-6px;line-height:1.3;">'
+                f'Aktual kapal: <strong style="color:#38bdf8;">{act_pct_dual:.1f}% ({format_number(act_dual_count)} Rit)</strong></div>'
+            )
+
+        # Delta dihitung terhadap KONDISI AKTUAL FILE TERUPLOAD
+        delta_pct_from_act = sim_penetrasi_pct - act_pct_dual
+
+        # --------------------------------------------------------
+        # Komputasi Model Efisiensi Dihitung Terhadap Data Aktual File
+        # --------------------------------------------------------
+        baseline_ritase = float(act_total_ritase)
+        bbm_per_rit = float(bbm_per_rit_input)
+        harga_solar = float(harga_solar_input)
+
+        # Jika target simulasi berada pada kondisi aktual file (selisih < 0.08%),
+        # gunakan nilai riil murni dari hasil analisis Dual Cycle:
+        # Dual Cycle = 2.062 Rit, Non-Dual = 2.056 Rit
+        if abs(delta_pct_from_act) < 0.08:
+            sim_ritase_dc = act_dual_count
+            sim_ritase_non_dc = act_single_count
+            delta_rit_vs_act = 0
+            delta_pct_from_act = 0.0
+        else:
+            delta_rit_vs_act = int(round((delta_pct_from_act / 100.0) * baseline_ritase))
+            sim_ritase_dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit_vs_act))
+            sim_ritase_non_dc = int(baseline_ritase - sim_ritase_dc)
+
+        # Total Solar dihemat vs Single Cycle murni (karena tiap rit DC meniadakan 1 trip kosong)
+        total_bbm_baseline = baseline_ritase * bbm_per_rit
+        solar_dihemat_total = sim_ritase_dc * bbm_per_rit
+        total_bbm_operasional = max(0.0, total_bbm_baseline - solar_dihemat_total)
+        bbm_per_rit_efektif = (total_bbm_operasional / baseline_ritase) if baseline_ritase > 0 else 0.0
+
+        # Tambahan Solar Dihemat & Finansial (dibandingkan kondisi aktual riil)
+        delta_solar_vs_act = delta_rit_vs_act * bbm_per_rit
+        finansial_delta_rp = delta_solar_vs_act * harga_solar
+        total_solar_hemat_rp = solar_dihemat_total * harga_solar
+
+        # Solar dan Biaya yang saat ini dihasilkan oleh kondisi aktual Dual Cycle file
+        solar_dihemat_aktual = act_dual_count * bbm_per_rit
+        biaya_saat_ini_rp = solar_dihemat_aktual * harga_solar
+
+        # --------------------------------------------------------
+        # Baris Kartu KPI Hasil Simulasi
+        # --------------------------------------------------------
+        render_html('<div style="height:12px;"></div>')
+        r1_c1, r1_c2, r1_c3 = st.columns(3)
+        with r1_c1:
+            render_kpi_card(
+                label="Total Ritase Baseline",
+                value=f"{format_number(act_total_ritase)} Rit",
+                subtext="Otomatis dari file kapal",
+                variant="purple",
+                tooltip=f"Total seluruh ritase operasional dari file kapal yang dianalisis ({format_number(act_total_ritase)} rit) sebagai acuan perhitungan efisiensi.",
+            )
+        with r1_c2:
+            dc_sub = f"Sesuai Kondisi Aktual ({act_pct_dual:.1f}%)" if delta_rit_vs_act == 0 else f"Target: {sim_penetrasi_pct:.1f}% ({delta_rit_vs_act:+d} Rit)"
+            render_kpi_card(
+                label="Ritase Dual Cycle Target",
+                value=f"{format_number(sim_ritase_dc)} Rit",
+                subtext=dc_sub,
+                variant="blue",
+                tooltip=f"Jumlah ritase 2 arah (kondisi aktual dari file: {format_number(act_dual_count)} rit).",
+            )
+        with r1_c3:
+            ndc_sub = f"Sesuai Kondisi Aktual ({act_pct_non_dual:.1f}%)" if delta_rit_vs_act == 0 else f"Target: {100.0-sim_penetrasi_pct:.1f}% ({-delta_rit_vs_act:+d} Rit)"
+            render_kpi_card(
+                label="Ritase Non-Dual Target",
+                value=f"{format_number(sim_ritase_non_dc)} Rit",
+                subtext=ndc_sub,
+                variant="slate",
+                tooltip=f"Jumlah ritase 1 arah yang tersisa (kondisi aktual dari file: {format_number(act_single_count)} rit).",
+                align_tooltip_right=True,
+            )
+
+        r2_c1, r2_c2 = st.columns(2)
+        with r2_c1:
+            render_kpi_card(
+                label="Biaya Saat Ini",
+                value=f"Rp {format_number(int(biaya_saat_ini_rp))}",
+                subtext=f"Dari {format_number(act_dual_count)} Rit DC ({format_decimal(solar_dihemat_aktual, 1)} L)",
+                variant="emerald",
+                tooltip=f"Nilai efisiensi biaya bahan bakar yang dihasilkan dari {format_number(act_dual_count)} ritase Dual Cycle aktual ({format_decimal(solar_dihemat_aktual, 1)} Liter solar pada tarif Rp {format_number(int(harga_solar))}/L).",
+            )
+        with r2_c2:
+            if abs(delta_rit_vs_act) == 0:
+                fin_val_str = "Rp 0"
+                fin_sub_str = "Sesuai Data Riil Kapal"
+                fin_variant = "blue"
+            elif finansial_delta_rp > 0:
+                fin_val_str = f"+Rp {format_number(int(finansial_delta_rp))}"
+                fin_sub_str = f"+{format_decimal(delta_solar_vs_act, 1)} L vs Aktual"
+                fin_variant = "emerald"
+            else:
+                fin_val_str = f"-Rp {format_number(int(abs(finansial_delta_rp)))}"
+                fin_sub_str = f"{format_decimal(delta_solar_vs_act, 1)} L vs Aktual"
+                fin_variant = "rose"
+
+            render_kpi_card(
+                label=f"Dampak Finansial (vs {act_pct_dual:.1f}%)",
+                value=fin_val_str,
+                subtext=fin_sub_str,
+                variant=fin_variant,
+                tooltip=f"Proyeksi penghematan atau pembengkakan biaya bahan bakar dibandingkan data aktual kapal ({act_pct_dual:.1f}% / {format_number(act_dual_count)} rit).",
+                align_tooltip_right=True,
+            )
+
+        # --------------------------------------------------------
+        # --------------------------------------------------------
+        # Bar Chart Sensitivitas Penetrasi
+        # --------------------------------------------------------
+        render_html('<div style="height:14px;"></div>')
+        # Skala interval standar tetap (setiap 5%) agar seluruh batang grafik teratur dan tidak bertumpukan
+        pct_range = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
+
+        curve_data = []
+        for p_val in pct_range:
+            p_ratio = p_val / 100.0
+            dc_val = int(round(p_ratio * baseline_ritase))
+            ndc_val = int(baseline_ritase - dc_val)
+            curve_data.append({
+                "Penetrasi (%)": p_val,
+                "Ritase DC": dc_val,
+                "Ritase Non-DC": ndc_val,
+                "Selected": (p_val == sim_penetrasi_pct),
+            })
+        df_curve = pd.DataFrame(curve_data)
+
+        fig_curve = go.Figure()
+
+        # Bar Ritase Dual Cycle
+        fig_curve.add_trace(
+            go.Bar(
+                x=df_curve["Penetrasi (%)"],
+                y=df_curve["Ritase DC"],
+                name="Ritase Dual Cycle",
+                marker_color="#0284C7",
+                hovertemplate="Penetrasi: %{x}%<br>Ritase DC: %{y:,.0f} rit<extra></extra>",
+            )
+        )
+
+        # Bar Ritase Non-Dual Cycle
+        fig_curve.add_trace(
+            go.Bar(
+                x=df_curve["Penetrasi (%)"],
+                y=df_curve["Ritase Non-DC"],
+                name="Ritase Non-Dual",
+                marker_color="#475569",
+                hovertemplate="Penetrasi: %{x}%<br>Ritase Non-DC: %{y:,.0f} rit<extra></extra>",
+            )
+        )
+
+        # Garis Penanda Vertikal Posisi Target Slider
+        fig_curve.add_vline(
+            x=sim_penetrasi_pct,
+            line_width=2,
+            line_dash="dash",
+            line_color="#38bdf8",
+        )
+
+        fig_curve.add_annotation(
+            x=sim_penetrasi_pct,
+            y=1.04,
+            yref="paper",
+            text=f"🎯 Target: {sim_penetrasi_pct}%",
+            showarrow=False,
+            font=dict(family="Plus Jakarta Sans", size=11, color="#38bdf8"),
+            bgcolor="rgba(13, 22, 38, 0.9)",
+            bordercolor="rgba(56, 189, 248, 0.4)",
+            borderwidth=1,
+            borderpad=4,
+        )
+
+        apply_glass_theme(fig_curve)
+        fig_curve.update_layout(
+            title=dict(text=f"Sensitivitas Penetrasi terhadap Komposisi Ritase (Aktual: {act_pct_dual:.1f}%)"),
+            barmode="stack",
+            height=550,
+            margin=dict(t=65, b=50, l=55, r=25),
+            xaxis=dict(
+                title="Penetrasi Dual Cycle (%)",
+                tickmode="array",
+                tickvals=pct_range,
+                ticktext=[f"{p}%" for p in pct_range],
+                gridcolor="rgba(255,255,255,0.06)",
+            ),
+            yaxis=dict(
+                title="Jumlah Ritase",
+                gridcolor="rgba(255,255,255,0.06)",
+                nticks=10,
+            ),
+            legend=dict(
+                orientation="h",
+                yanchor="bottom",
+                y=1.02,
+                xanchor="right",
+                x=1.0,
+            ),
+        )
+        st.plotly_chart(fig_curve, use_container_width=True, key="curve_sensitivity_sim_chart")
+
+        # --------------------------------------------------------
+        # Tabel Matriks Skema Sensitivitas Dinamis Berpusat pada Aktual File
+        # --------------------------------------------------------
+        render_html('<div style="height:16px;"></div>')
+        st.markdown(
+            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
+            f'<span style="font-size: 15px; font-weight: 700; color: #ffffff; font-family: \'Plus Jakarta Sans\', sans-serif;">Skema Sensitivitas Penetrasi (Titik Acuan: Aktual File {act_pct_dual:.1f}%)</span>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Hasilkan skenario sensitivitas dinamis seputar rasio aktual
+        act_point = round(act_pct_dual, 1)
+        base_int = int(round(act_pct_dual))
+        rel_deltas = [-15, -10, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30]
+        # Hilangkan nilai integer 50% jika terlalu berhimpitan dengan 50.1% agar tidak ada baris duplikat
+        regular_pcts = [max(10, min(95, base_int + d)) for d in rel_deltas if abs((base_int + d) - act_point) >= 0.5]
+
+        all_pcts = set(regular_pcts)
+        all_pcts.add(act_point)
+        if abs(sim_penetrasi_pct - act_point) >= 0.5:
+            all_pcts.add(round(sim_penetrasi_pct, 1))
+
+        skenario_pcts = sorted(list(all_pcts))
+
+        table_rows = []
+        for p in skenario_pcts:
+            is_actual_point = (abs(p - act_pct_dual) < 0.15)
+            is_target_point = (abs(p - sim_penetrasi_pct) < 0.05 and not is_actual_point)
+
+            if is_actual_point:
+                status_label = "📍 Kondisi Saat Ini"
+                dc = act_dual_count          # 2.062 Rit (Murni hasil perhitungan file terupload)
+                ndc = act_single_count       # 2.056 Rit (Murni hasil perhitungan file terupload)
+                delta_p = 0.0
+                delta_rit = 0
+                sol_hemat = int(round(dc * bbm_per_rit))
+                tot_bbm = int(round(ndc * bbm_per_rit))
+                bbm_rit = round(tot_bbm / baseline_ritase, 2) if baseline_ritase > 0 else 0.0
+                fin_rp = 0.0
+            else:
+                p_ratio = p / 100.0
+                delta_p = p - act_pct_dual
+                delta_rit = int(round((delta_p / 100.0) * baseline_ritase))
+                dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit))
+                ndc = int(baseline_ritase - dc)
+                sol_hemat = int(round(dc * bbm_per_rit))
+                tot_bbm = int(round(total_bbm_baseline - sol_hemat))
+                bbm_rit = round(tot_bbm / baseline_ritase, 2) if baseline_ritase > 0 else 0.0
+                fin_rp = delta_rit * bbm_per_rit * harga_solar
+                status_label = "🎯 Target Skenario" if is_target_point else ""
+
+            if abs(delta_p) < 0.05:
+                delta_str = "0.0%"
+            else:
+                delta_str = f"{delta_p:+.1f}%"
+
+            if abs(fin_rp) < 1:
+                fin_str = "Rp 0"
+            elif fin_rp > 0:
+                fin_str = f"+Rp {format_number(int(fin_rp))}"
+            else:
+                fin_str = f"-Rp {format_number(int(abs(fin_rp)))}"
+
+            table_rows.append({
+                "Status": status_label,
+                "Skenario Penetrasi": f"{p}%",
+                "Delta vs Aktual (±%)": delta_str,
+                "Ritase Dual Cycle": format_number(dc),
+                "Ritase Non-Dual": format_number(ndc),
+                "Solar Dihemat (Liter)": f"{format_number(sol_hemat)} L",
+                "Total Penggunaan BBM": f"{format_number(tot_bbm)} L",
+                "Total BBM per Rit": f"{bbm_rit:.2f} L/Rit",
+                "Efisiensi Finansial (vs Aktual)": fin_str,
+            })
+
+        df_sensitivity_table = pd.DataFrame(table_rows)
+
+        st.dataframe(
+            df_sensitivity_table,
+            use_container_width=True,
+            hide_index=True,
+            height=540,
+            column_config={
+                "Status": st.column_config.TextColumn("Status", width="medium"),
+                "Skenario Penetrasi": st.column_config.TextColumn("Skenario", width="small"),
+                "Delta vs Aktual (±%)": st.column_config.TextColumn("Delta vs Aktual", width="small"),
+                "Ritase Dual Cycle": st.column_config.TextColumn("Ritase DC", width="small"),
+                "Ritase Non-Dual": st.column_config.TextColumn("Ritase Non-DC", width="small"),
+                "Solar Dihemat (Liter)": st.column_config.TextColumn("Dampak Solar (Liter)", width="medium"),
+                "Total Penggunaan BBM": st.column_config.TextColumn("Total BBM (Liter)", width="medium"),
+                "Total BBM per Rit": st.column_config.TextColumn("BBM / Rit", width="small"),
+                "Efisiensi Finansial (vs Aktual)": st.column_config.TextColumn("Dampak Finansial (vs Aktual)", width="medium"),
+            },
+        )
+
+
+    # ----------------------------------------------------------------
+    # TAB 4: DOWNLOAD HASIL ANALISIS
+    # ----------------------------------------------------------------
+    elif active_tab == "Download Hasil Analisis":
         cols_to_exclude = [
             "TWINLIFT_GAP_MENIT",
             "DUAL_PAIR_ID",

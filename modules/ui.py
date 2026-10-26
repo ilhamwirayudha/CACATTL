@@ -18,14 +18,23 @@ import streamlit.components.v1 as components
 BASE_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 TEMPLATES_DIR = BASE_DIR / "templates"
+GIFS_DIR = ASSETS_DIR / "gifs"
+GIFS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def find_asset_file(candidates: list[str]) -> Path | None:
-    """Mencari file aset dari daftar kandidat nama file."""
+    """Mencari file aset dari daftar kandidat nama file (mendukung pencarian case-insensitive)."""
     for name in candidates:
         p = ASSETS_DIR / name
         if p.exists() and p.is_file():
             return p
+        # Coba pencarian case-insensitive di folder target
+        target_dir = p.parent
+        if target_dir.exists() and target_dir.is_dir():
+            target_name_lower = p.name.lower()
+            for item in target_dir.iterdir():
+                if item.is_file() and item.name.lower() == target_name_lower:
+                    return item
     return None
 
 
@@ -33,14 +42,16 @@ def find_asset_file(candidates: list[str]) -> Path | None:
 def setup_template_and_asset_watchers():
     """
     Mengaktifkan pemantauan otomatis (live reload) untuk folder templates/ dan assets/.
-    Ketika pengguna atau developer mengedit file HTML atau CSS, Streamlit akan otomatis
-    melakukan rerun pada browser secara real-time tanpa perlu refresh halaman web.
+    Ketika pengguna atau developer mengedit file HTML, CSS, atau menambahkan GIF, Streamlit
+    akan otomatis melakukan rerun pada browser secara real-time.
     """
     try:
         from streamlit.watcher.path_watcher import watch_dir
         from streamlit.runtime import Runtime
 
         def _on_resource_changed(changed_path: str):
+            if ".cache" in changed_path:
+                return
             if Runtime.exists():
                 try:
                     rt = Runtime.instance()
@@ -51,13 +62,15 @@ def setup_template_and_asset_watchers():
 
         watch_dir(str(TEMPLATES_DIR.resolve()), _on_resource_changed)
         watch_dir(str(ASSETS_DIR.resolve()), _on_resource_changed)
+        if GIFS_DIR.exists():
+            watch_dir(str(GIFS_DIR.resolve()), _on_resource_changed)
         return True
     except Exception:
         return False
 
 
-# Inisialisasi watcher templates dan assets saat modul dimuat
-setup_template_and_asset_watchers()
+# Inisialisasi watcher templates dan assets dipanggil saat inject_css (setelah st.set_page_config)
+
 
 
 
@@ -147,6 +160,7 @@ def render_template(_template_name: str, **context):
 
 def inject_css(css_filename: str = "style.css"):
     """Membaca file CSS dari folder assets/ dan menginjeksikannya ke dalam aplikasi."""
+    setup_template_and_asset_watchers()
     css_path = ASSETS_DIR / css_filename
     if css_path.exists():
         css_content = css_path.read_text(encoding="utf-8")
@@ -717,9 +731,10 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
 
     total_trucks = df_data["Truk"].nunique()
     avg_gap = df_data["Gap (Menit)"].mean()
+    ambang_dual = float(summary.get("ambang_dual", 30.0)) if summary else 30.0
 
     # Mini KPI Summary Row dengan Kartu Glassmorphism & Icon Help (?)
-    mk1, mk2, mk3 = st.columns(3)
+    mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
         render_kpi_card(
             label="Total Kapal",
@@ -740,6 +755,13 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
             value=f"{format_decimal(avg_gap, 1)} menit",
             variant="blue",
             tooltip="Rata-rata selisih waktu tunggu antar aktivitas (selisih waktu selesai aktivitas pertama ke waktu mulai aktivitas kedua).",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Parameter Dual Batas",
+            value=f"≤ {ambang_dual:.0f} mnt",
+            variant="blue",
+            tooltip=f"Parameter batas toleransi jeda waktu antar aktivitas untuk diklasifikasikan sebagai Dual Cycle ({ambang_dual:.0f} menit).",
             align_tooltip_right=True,
         )
 
@@ -762,7 +784,8 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
         },
     )
 
-    st.caption(f"Menampilkan total **{format_number(len(df_data))}** pasangan Dual Cycle.")
+    st.caption(f"Menampilkan total **{format_number(len(df_data))}** pasangan Dual Cycle (Batas toleransi jeda waktu: ≤ **{ambang_dual:.0f}** menit).")
+
 
 @st.dialog("Rincian Aktivitas Non-Dual", width="large")
 def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict = None):
@@ -782,6 +805,7 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
     disc_count = int((df_data["Aktivitas"] == "DISC").sum())
     load_count = int((df_data["Aktivitas"] == "LOAD").sum())
     avg_dur = df_data["Durasi (Menit)"].mean()
+    ambang_dual = float(summary.get("ambang_dual", 30.0)) if summary else 30.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
@@ -791,7 +815,7 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
     with mk3:
         st.metric("Bongkar (DISC)", f"{format_number(disc_count)} evt", f"{format_number(load_count)} LOAD")
     with mk4:
-        st.metric("Rata-rata Durasi", f"{format_decimal(avg_dur, 1)} mnt")
+        st.metric("Rata-rata Durasi", f"{format_decimal(avg_dur, 1)} mnt", f"Batas Dual: > {ambang_dual:.0f} mnt")
 
     # Filter Pencarian & Aktivitas
     fc1, fc2, fc3 = st.columns([1.8, 1.1, 1.1])
@@ -856,7 +880,8 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
         },
     )
 
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(len(df_data))}** event Non Dual.")
+    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(len(df_data))}** event Non Dual (Jeda antar ritase bergantian > **{ambang_dual:.0f}** menit atau aktivitas tunggal).")
+
 
 
 
@@ -878,15 +903,19 @@ prepare_issue_gap_zero_table = prepare_fast_transition_dual_table
 
 
 def prepare_potential_dual_table(
-    events: pd.DataFrame, out_df: pd.DataFrame, ambang_dual: float = 30.0, max_gap: float = 360.0
+    events: pd.DataFrame, out_df: pd.DataFrame, ambang_dual: float = 30.0, max_gap: float = 180.0
 ) -> pd.DataFrame:
     """
     Menyusun tabel ritase potensi Dual Cycle yang tidak terkualifikasi karena gap waktu melebihi ambang batas.
     Kriteria: Truk yang sama melakukan aktivitas bergantian (DISC ➔ LOAD atau LOAD ➔ DISC)
-    secara berurutan, namun jeda waktu tunggunya > ambang_dual (dan <= max_gap menit).
+    secara berurutan dalam rentang waktu toleransi (ambang_dual < gap <= max_gap).
+    Aktivitas dengan gap melebihi batas toleransi max_gap (mis. jeda beda hari / shift terpisah) diabaikan.
     """
     if events is None or len(events) == 0:
         return pd.DataFrame()
+
+    # Batas atas evaluasi potensi diambil langsung dari max_gap (slider Langkah 2)
+    effective_max_gap = float(max_gap) if max_gap is not None else max(float(ambang_dual) + 60.0, 180.0)
 
     ev = events.reset_index(drop=True)
     truck_positions = ev.groupby("CAR_CHE_ID").indices
@@ -912,8 +941,9 @@ def prepare_potential_dual_table(
             if activity[i] != activity[k] and (status[i] != "Dual Cycle" or status[k] != "Dual Cycle"):
                 gap = (start[k] - end[i]) / np.timedelta64(1, "m")
                 gap_r = round(gap, 1)
-                if gap_r > ambang_dual and gap_r <= max_gap:
+                if gap_r > ambang_dual and gap_r <= effective_max_gap:
                     truk_id = str(ev.loc[i, "CAR_CHE_ID"]).replace(".0", "")
+
                     act1 = activity[i]
                     act2 = activity[k]
                     eid1 = ev.loc[i, "EVENT_ID"] if "EVENT_ID" in ev.columns else ev.loc[i, "GROUP_ID"]
@@ -954,12 +984,42 @@ def _show_issue_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict
     inject_modal_backdrop_protection()
 
     ambang_dual = float(summary.get("ambang_dual", 30.0)) if summary else 30.0
-    df_potensi = prepare_potential_dual_table(events, out_df, ambang_dual=ambang_dual)
+    max_gap_dual = float(
+        st.session_state.get(
+            "slider_sim_max_gap_dual",
+            st.session_state.get(
+                "slider_max_gap_potensi_dual",
+                summary.get("max_gap_dual", 180.0) if summary else 180.0,
+            ),
+        )
+    )
 
-    total_potensi = len(df_potensi)
-    truk_potensi = set(df_potensi["Truk"].tolist()) if total_potensi > 0 else set()
+    df_potensi = prepare_potential_dual_table(events, out_df, ambang_dual=ambang_dual, max_gap=max_gap_dual)
+
+    if len(df_potensi) == 0:
+        st.success(f"Tidak ada ritase dengan aktivitas bergantian dalam batas toleransi ({ambang_dual:.0f} mnt < gap ≤ {max_gap_dual:.0f} mnt). Seluruh ritase sudah terkualifikasi sebagai Dual Cycle aktif!")
+        if st.button("Tutup", key="btn_close_empty_pot_dual", type="secondary"):
+            st.rerun()
+        return
+
+    # Toolbar Pencarian Cepat
+    q_potensi = st.text_input(
+        "🔍 Cari Truk atau Ringkasan Siklus (Potensi Dual):",
+        key="search_issue_potensi_q",
+        placeholder="Ketik nomor truk atau kode kapal...",
+    )
+
+    df_display = df_potensi.copy()
+    if q_potensi:
+        qp_lower = q_potensi.strip().lower()
+        m_pot = df_display["Truk"].str.lower().str.contains(qp_lower, na=False) | df_display["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
+        df_display = df_display[m_pot]
+
+    # Hitung Metrik KPI Sesuai Parameter Dual Cycle yang Aktif
+    total_potensi = len(df_display)
+    truk_potensi = set(df_display["Truk"].tolist()) if total_potensi > 0 else set()
     truk_terdampak = len(truk_potensi)
-    avg_gap_potensi = df_potensi["Gap (Menit)"].mean() if total_potensi > 0 else 0.0
+    avg_gap_potensi = df_display["Gap (Menit)"].mean() if total_potensi > 0 else 0.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
@@ -967,65 +1027,59 @@ def _show_issue_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict
             label="Potensi Dual Cycle",
             value=f"{format_number(total_potensi)} Ritase",
             variant="blue",
-            tooltip=f"Aktivitas ritase bergantian (DISC/LOAD) yang jeda waktu tunggunya melebihi ambang batas ({ambang_dual:.0f} mnt).",
+            tooltip=f"Aktivitas ritase bergantian (DISC/LOAD) dengan jeda waktu antara {ambang_dual:.0f} mnt s/d batas toleransi {max_gap_dual:.0f} mnt.",
         )
     with mk2:
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(truk_terdampak)} Truk",
             variant="amber",
-            tooltip="Total armada truk yang memiliki potensi pergerakan Dual Cycle.",
+            tooltip="Total armada truk unik yang memiliki aktivitas bergantian dalam rentang toleransi potensi.",
         )
     with mk3:
         render_kpi_card(
             label="Rata-rata Gap",
             value=f"{format_decimal(avg_gap_potensi, 1)} mnt",
             variant="blue",
-            tooltip=f"Rata-rata selisih jeda waktu tunggu truk pada potensi Dual Cycle yang melebihi batas {ambang_dual:.0f} menit.",
+            tooltip=f"Rata-rata jeda waktu tunggu truk pada ritase potensi ({ambang_dual:.0f} mnt < gap ≤ {max_gap_dual:.0f} mnt).",
         )
     with mk4:
         render_kpi_card(
-            label="Ambang Batas",
-            value=f"≤ {ambang_dual:.0f} mnt",
+            label="Maksimal Toleransi",
+            value=f"≤ {max_gap_dual:.0f} mnt",
             variant="blue",
-            tooltip=f"Parameter batas maksimal jeda waktu agar terhitung sebagai Dual Cycle aktif.",
+            tooltip=f"Batas maksimal toleransi gap diatur dari slider di tab Simulasi: ≤ {max_gap_dual:.0f} mnt (Target Dual Cycle aktif: ≤ {ambang_dual:.0f} mnt).",
             align_tooltip_right=True,
         )
 
+    render_html('<div style="height:8px;"></div>')
 
-    if total_potensi == 0:
-        st.success("Tidak ada ritase dengan aktivitas bergantian yang melebihi ambang batas.")
-    else:
-        fc1, fc2 = st.columns([2, 1.2])
-        with fc1:
-            q_potensi = st.text_input("🔍 Cari Truk atau Ringkasan Siklus (Potensi Dual):", key="search_issue_potensi_q", placeholder="Ketik nomor truk atau kode kapal...")
-        with fc2:
-            max_gap_filter = st.slider("Maksimal Gap (Menit):", min_value=int(ambang_dual) + 5, max_value=360, value=180, step=15, key="slider_max_gap_potensi")
+    # Dataframe Interaktif
+    st.dataframe(
+        df_display.drop(columns=["Truk"], errors="ignore"),
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Siklus", width="medium"),
+            "Urutan": st.column_config.TextColumn("Urutan", width="small"),
+            "Kapal Ritase 1": st.column_config.TextColumn("Kapal 1", width="small"),
+            "Crane Ritase 1": st.column_config.TextColumn("Crane 1", width="small"),
+            "Kapal Ritase 2": st.column_config.TextColumn("Kapal 2", width="small"),
+            "Crane Ritase 2": st.column_config.TextColumn("Crane 2", width="small"),
+            "Waktu Selesai Ritase 1": st.column_config.TextColumn("Selesai 1", width="small"),
+            "Waktu Mulai Ritase 2": st.column_config.TextColumn("Mulai 2", width="small"),
+            "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+            "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
+        },
+    )
 
-        df_pot_filtered = df_potensi[df_potensi["Gap (Menit)"] <= max_gap_filter].copy()
-        if q_potensi:
-            qp_lower = q_potensi.lower()
-            m_pot = df_pot_filtered["Truk"].str.lower().str.contains(qp_lower, na=False) | df_pot_filtered["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
-            df_pot_filtered = df_pot_filtered[m_pot]
+    st.caption(
+        f"Menampilkan total **{format_number(len(df_display))}** ritase potensi Dual Cycle "
+        f"(Jeda waktu tunggu antara **> {ambang_dual:.0f} menit** dan **≤ {max_gap_dual:.0f} menit**, diatur melalui slider di tab Simulasi)."
+    )
 
-        st.dataframe(
-            df_pot_filtered.drop(columns=["Truk"], errors="ignore"),
-            use_container_width=True,
-            hide_index=True,
-            height=420,
-            column_config={
-                "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Siklus", width="medium"),
-                "Urutan": st.column_config.TextColumn("Urutan", width="small"),
-                "Kapal Ritase 1": st.column_config.TextColumn("Kapal 1", width="small"),
-                "Crane Ritase 1": st.column_config.TextColumn("Crane 1", width="small"),
-                "Kapal Ritase 2": st.column_config.TextColumn("Kapal 2", width="small"),
-                "Crane Ritase 2": st.column_config.TextColumn("Crane 2", width="small"),
-                "Waktu Selesai Ritase 1": st.column_config.TextColumn("Selesai 1", width="small"),
-                "Waktu Mulai Ritase 2": st.column_config.TextColumn("Mulai 2", width="small"),
-                "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
-                "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
-            },
-        )
+
 
 def show_activity_detail_dialog(status: str, events: pd.DataFrame, out_df: pd.DataFrame, summary: dict = None):
     """
@@ -1184,16 +1238,18 @@ def prepare_potential_combo_table(
     out_df: pd.DataFrame,
     events: pd.DataFrame = None,
     ambang_combo: float = 3.0,
-    max_gap: float = 60.0,
+    max_gap: float = 30.0,
 ) -> pd.DataFrame:
     """
     Menyusun tabel potensi Combo tertunda:
     Kontainer 20ft pada truk yang sama dan aktivitas yang sama (DISC-DISC atau LOAD-LOAD),
-    namun jeda waktu tunggunya melebihi ambang_combo (dan <= max_gap menit),
+    namun jeda waktu tunggunya melebihi ambang_combo dan <= max_gap menit,
     sehingga terpaksa dihitung sebagai Single terpisah.
     """
     if out_df is None or len(out_df) == 0:
         return pd.DataFrame()
+
+    effective_max_gap = float(max_gap) if max_gap is not None else max(float(ambang_combo) + 15.0, 30.0)
 
     df20 = out_df[out_df["CTR_SIZE"] == 20].copy()
     if len(df20) < 2:
@@ -1216,8 +1272,10 @@ def prepare_potential_combo_table(
             gap = min(gap_g, gap_h)
             gap_r = round(gap, 1)
 
-            if gap_r > ambang_combo and gap_r <= max_gap:
+            if gap_r > ambang_combo and gap_r <= effective_max_gap:
                 truk_id = str(truck).replace(".0", "")
+
+
                 ves1 = str(r1["VES_ID"])
                 ves2 = str(r2["VES_ID"])
                 cr1 = str(r1["CRANE_ID"])
@@ -1263,6 +1321,7 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
     total_kontainer = total_ritase * 2
     total_trucks = df_data["Truk"].nunique()
     avg_gap = df_data["Gap Combo (Menit)"].mean()
+    ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
@@ -1291,7 +1350,7 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
             label="Rata-rata Gap Combo",
             value=f"{format_decimal(avg_gap, 1)} mnt",
             variant="blue",
-            tooltip="Rata-rata selisih waktu aktivitas 2 kontainer.",
+            tooltip=f"Rata-rata selisih waktu aktivitas 2 kontainer (Batas ambang combo aktif: ≤ {ambang_combo:.0f} menit).",
             align_tooltip_right=True,
         )
 
@@ -1326,6 +1385,8 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
         },
     )
 
+    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** ritase Combo (Batas toleransi jeda waktu: ≤ **{ambang_combo:.0f}** menit).")
+
 @st.dialog("Rincian Aktivitas Single (Kontainer 20ft)", width="large")
 def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
     """
@@ -1344,6 +1405,7 @@ def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dic
     total_kontainer = total_ritase
     total_trucks = df_data["Truk"].nunique()
     avg_durasi = df_data["Durasi (Menit)"].mean() if "Durasi (Menit)" in df_data.columns else 0.0
+    ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
@@ -1405,6 +1467,9 @@ def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dic
         },
     )
 
+    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** ritase Single 20ft (Kontainer tunggal atau jeda pasangan > **{ambang_combo:.0f}** menit).")
+
+
 
 @st.dialog("Rincian Potensi Combo (Kontainer 20ft)", width="large")
 def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
@@ -1414,12 +1479,41 @@ def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary
     inject_modal_backdrop_protection()
 
     ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
-    df_potensi = prepare_potential_combo_table(out_df, events, ambang_combo=ambang_combo)
+    max_gap_combo = float(
+        st.session_state.get(
+            "slider_sim_max_gap_combo",
+            st.session_state.get(
+                "slider_max_gap_potensi_combo",
+                summary.get("max_gap_combo", 30.0) if summary else 30.0,
+            ),
+        )
+    )
 
-    total_potensi = len(df_potensi)
-    truk_potensi = set(df_potensi["Truk"].tolist()) if total_potensi > 0 else set()
+    df_potensi = prepare_potential_combo_table(out_df, events, ambang_combo=ambang_combo, max_gap=max_gap_combo)
+
+    if len(df_potensi) == 0:
+        st.success(f"Tidak ada kontainer 20ft dengan aktivitas sama dalam batas toleransi ({ambang_combo:.0f} mnt < gap ≤ {max_gap_combo:.0f} mnt). Seluruh kontainer sudah terkualifikasi Combo!")
+        if st.button("Tutup", key="btn_close_empty_pot_combo", type="secondary"):
+            st.rerun()
+        return
+
+    # Toolbar Pencarian Cepat
+    q_potensi = st.text_input(
+        "🔍 Cari Truk atau Ringkasan Siklus (Potensi Combo):",
+        key="search_combo_issue_potensi_q",
+        placeholder="Ketik nomor truk atau kode kapal...",
+    )
+
+    df_display = df_potensi.copy()
+    if q_potensi:
+        qp_lower = q_potensi.strip().lower()
+        m_pot = df_display["Truk"].str.lower().str.contains(qp_lower, na=False) | df_display["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
+        df_display = df_display[m_pot]
+
+    total_potensi = len(df_display)
+    truk_potensi = set(df_display["Truk"].tolist()) if total_potensi > 0 else set()
     truk_terdampak = len(truk_potensi)
-    avg_gap_potensi = df_potensi["Gap (Menit)"].mean() if total_potensi > 0 else 0.0
+    avg_gap_potensi = df_display["Gap (Menit)"].mean() if total_potensi > 0 else 0.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
@@ -1427,64 +1521,58 @@ def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary
             label="Potensi Combo",
             value=f"{format_number(total_potensi)} Data",
             variant="blue",
-            tooltip=f"Data kontainer 20ft pada aktivitas sama yang tidak ter-combo karena jeda waktu melebihi ambang batas ({ambang_combo:.0f} mnt).",
+            tooltip=f"Data pasangan kontainer 20ft pada aktivitas sama dengan jeda waktu antara {ambang_combo:.0f} mnt s/d batas toleransi {max_gap_combo:.0f} mnt.",
         )
     with mk2:
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(truk_terdampak)} Truk",
             variant="amber",
-            tooltip="Total armada truk unik yang teridentifikasi memiliki potensi Combo tertunda.",
+            tooltip="Total armada truk unik yang memiliki potensi Combo tertunda.",
         )
     with mk3:
         render_kpi_card(
             label="Rata-rata Gap Potensi",
             value=f"{format_decimal(avg_gap_potensi, 1)} mnt",
             variant="blue",
-            tooltip=f"Rata-rata jeda waktu pada pasangan kontainer potensi Combo yang melebihi ambang batas ({ambang_combo:.0f} mnt).",
+            tooltip=f"Rata-rata jeda waktu pasangan kontainer 20ft ({ambang_combo:.0f} mnt < gap ≤ {max_gap_combo:.0f} mnt).",
         )
     with mk4:
         render_kpi_card(
-            label="Ambang Batas Combo",
-            value=f"≤ {ambang_combo:.0f} mnt",
+            label="Maksimal Toleransi",
+            value=f"≤ {max_gap_combo:.0f} mnt",
             variant="blue",
-            tooltip=f"Batas toleransi maksimal waktu antar kontainer 20ft untuk dianggap sebagai satu muatan Combo bersamaan.",
+            tooltip=f"Batas maksimal toleransi gap diatur dari slider di tab Simulasi: ≤ {max_gap_combo:.0f} mnt (Target Combo aktif: ≤ {ambang_combo:.0f} mnt).",
             align_tooltip_right=True,
         )
 
-    if total_potensi == 0:
-        st.success("Tidak ada kontainer dengan aktivitas sama yang jeda waktunya melebihi ambang batas.")
-    else:
-        fc1, fc2 = st.columns([2, 1.2])
-        with fc1:
-            q_potensi = st.text_input("🔍 Cari Truk atau Ringkasan Siklus (Potensi Combo):", key="search_combo_issue_potensi_q", placeholder="Ketik nomor truk atau kode kapal...")
-        with fc2:
-            max_gap_filter = st.slider("Maksimal Gap (Menit):", min_value=int(ambang_combo) + 1, max_value=60, value=30, step=5, key="slider_max_gap_combo_potensi")
+    render_html('<div style="height:8px;"></div>')
 
-        df_pot_filtered = df_potensi[df_potensi["Gap (Menit)"] <= max_gap_filter].copy()
-        if q_potensi:
-            qp_lower = q_potensi.lower()
-            m_pot = df_pot_filtered["Truk"].str.lower().str.contains(qp_lower, na=False) | df_pot_filtered["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
-            df_pot_filtered = df_pot_filtered[m_pot]
+    st.dataframe(
+        df_display.drop(columns=["Truk"], errors="ignore"),
+        use_container_width=True,
+        hide_index=True,
+        height=420,
+        column_config={
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Combo", width="medium"),
+            "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
+            "Kapal 1": st.column_config.TextColumn("Kapal 1", width="small"),
+            "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
+            "Kapal 2": st.column_config.TextColumn("Kapal 2", width="small"),
+            "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
+            "Waktu 1": st.column_config.TextColumn("Waktu 1", width="small"),
+            "Waktu 2": st.column_config.TextColumn("Waktu 2", width="small"),
+            "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+            "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
+        },
+    )
 
-        st.dataframe(
-            df_pot_filtered.drop(columns=["Truk"], errors="ignore"),
-            use_container_width=True,
-            hide_index=True,
-            height=420,
-            column_config={
-                "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Combo", width="medium"),
-                "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
-                "Kapal 1": st.column_config.TextColumn("Kapal 1", width="small"),
-                "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
-                "Kapal 2": st.column_config.TextColumn("Kapal 2", width="small"),
-                "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
-                "Waktu 1": st.column_config.TextColumn("Waktu 1", width="small"),
-                "Waktu 2": st.column_config.TextColumn("Waktu 2", width="small"),
-                "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
-                "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
-            },
-        )
+    st.caption(
+        f"Menampilkan total **{format_number(len(df_display))}** potensi Combo "
+        f"(Jeda waktu kontainer 20ft antara **> {ambang_combo:.0f} menit** dan **≤ {max_gap_combo:.0f} menit**, diatur melalui slider di tab Simulasi)."
+    )
+
+
 
 
 def show_combo_detail_dialog(status: str, out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
@@ -1729,9 +1817,10 @@ def _show_non_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
     load_count = int((df_non["Aktivitas"] == "LOAD").sum())
 
     # KPI Summary Row
+    ambang_tw = float(summary.get("ambang_twinlift", 1.0)) if summary else 1.0
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
-        st.metric("Total Bukan Twinlift", f"{format_number(total_non_twin)} Ctr", "Single lift 20ft")
+        st.metric("Total Bukan Twinlift", f"{format_number(total_non_twin)} Ctr", f"Batas: > {format_decimal(ambang_tw, 0)} mnt")
     with mk2:
         st.metric("% Bukan Twinlift", format_percent(pct_non_twin, 1), f"dari {format_number(grand_total_non_twin)} Ctr Bukan Twinlift")
     with mk3:
@@ -1770,7 +1859,8 @@ def _show_non_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
         },
     )
 
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(total_non_twin)}** kontainer Bukan Twinlift ({act_label_desc.lower()}).")
+    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(total_non_twin)}** kontainer Bukan Twinlift ({act_label_desc.lower()} - Jeda lifting > **{format_decimal(ambang_tw, 0)}** menit atau lifting tunggal).")
+
 
 
 def show_twinlift_detail_dialog(status: str, out_df: pd.DataFrame, summary: dict = None):
@@ -1782,4 +1872,165 @@ def show_twinlift_detail_dialog(status: str, out_df: pd.DataFrame, summary: dict
         _show_twinlift_dialog(out_df, summary)
     else:
         _show_non_twinlift_dialog(out_df, summary)
+
+
+def _get_optimized_preview_uri(gif_file: Path) -> str:
+    """
+    Mengoptimalkan file animasi berukuran besar (> 3 MB) agar dapat di-render
+    dengan sangat ringan di tooltip Streamlit tanpa membebani browser atau WebSocket.
+    Menghasilkan animasi WebP berukuran kompak (~1.5 MB) yang tetap tajam dan mulus.
+    """
+    try:
+        file_size = gif_file.stat().st_size
+        # Jika file sudah cukup kecil (<= 3 MB), gunakan langsung tanpa kompresi
+        if file_size <= 3 * 1024 * 1024:
+            suffix = gif_file.suffix.lower().lstrip(".")
+            mime = "image/gif" if suffix == "gif" else f"image/{suffix}"
+            b64 = base64.b64encode(gif_file.read_bytes()).decode("utf-8")
+            return f"data:{mime};base64,{b64}"
+
+        # Untuk file besar (> 3 MB), buat thumbnail WebP animasi berukuran kompak (lebar ~380px)
+        mtime = int(gif_file.stat().st_mtime)
+        cache_dir = gif_file.parent / ".cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_file = cache_dir / f"{gif_file.stem}_{file_size}_{mtime}.webp"
+
+        need_regenerate = not cache_file.exists()
+
+        if need_regenerate:
+            # Bersihkan cache lama untuk file ini
+            for old_cache in cache_dir.glob(f"{gif_file.stem}_*.webp"):
+                try:
+                    old_cache.unlink()
+                except Exception:
+                    pass
+
+            from PIL import Image, ImageSequence
+            im = Image.open(gif_file)
+            w, h = im.size
+            new_w = min(w, 380)
+            new_h = int(h * (new_w / w))
+
+            step = 2 if getattr(im, "n_frames", 1) > 40 else 1
+            frames = []
+            for i, frame in enumerate(ImageSequence.Iterator(im)):
+                if i % step == 0:
+                    f = frame.copy().convert("RGBA").resize((new_w, new_h), Image.Resampling.BILINEAR)
+                    frames.append(f)
+
+            dur = im.info.get("duration", 50) * step
+            if frames:
+                frames[0].save(
+                    cache_file,
+                    save_all=True,
+                    append_images=frames[1:],
+                    optimize=True,
+                    quality=65,
+                    duration=dur,
+                    loop=0
+                )
+
+        if cache_file.exists():
+            b64 = base64.b64encode(cache_file.read_bytes()).decode("utf-8")
+            return f"data:image/webp;base64,{b64}"
+
+        # Fallback jika pembuatan cache gagal
+        suffix = gif_file.suffix.lower().lstrip(".")
+        mime = "image/gif" if suffix == "gif" else f"image/{suffix}"
+        b64 = base64.b64encode(gif_file.read_bytes()).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return ""
+
+
+@st.cache_data(show_spinner=False)
+def _build_parameter_tooltip(param_key: str, file_sig: str) -> str:
+    """Helper internal untuk membuat teks markdown tooltip dengan cache performa."""
+    targets = {
+        "combo": "combo.gif",
+        "dual_cycle": "dual_cycle.gif",
+        "twinlift": "twinlift.gif",
+    }
+    target_filename = targets.get(param_key, f"{param_key}.gif")
+
+    gif_candidates = {
+        "combo": [
+            "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
+            "combo.gif", "combo.webp",
+        ],
+        "dual_cycle": [
+            "gifs/dual_cycle.gif", "gifs/dual_cycle.webp", "gifs/dualcycle.gif", "gifs/dual-cycle.gif", "gifs/dual_cycle.png",
+            "dual_cycle.gif", "dual_cycle.webp",
+        ],
+        "twinlift": [
+            "gifs/twinlift.gif", "gifs/twinlift.webp", "gifs/twin_lift.gif", "gifs/twin-lift.gif", "gifs/twinlift.png",
+            "twinlift.gif", "twinlift.webp",
+        ],
+    }
+
+    # 1. Cek apakah pengguna sudah menaruh file GIF kustom di assets/gifs/ atau assets/
+    gif_file = find_asset_file(gif_candidates.get(param_key, []))
+    is_custom_file = False
+    if gif_file:
+        img_uri = _get_optimized_preview_uri(gif_file)
+        is_custom_file = bool(img_uri)
+    else:
+        # Tampilkan bingkai placeholder visual minimalis (menunggu file GIF asli)
+        placeholder_svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 358 92" width="358" height="92">
+          <rect x="2" y="2" width="354" height="88" rx="8" fill="#090e1a" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="6,4" stroke-opacity="0.5"/>
+          <circle cx="179" cy="32" r="13" fill="#1e293b" stroke="#38bdf8" stroke-width="1" stroke-opacity="0.6"/>
+          <polygon points="175,27 185,32 175,37" fill="#38bdf8"/>
+          <text x="179" y="58" fill="#f1f5f9" font-size="10.5" font-weight="600" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">Placeholder Animasi GIF ({target_filename})</text>
+          <text x="179" y="74" fill="#64748b" font-size="8.5" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif">Letakkan file {target_filename} di folder assets/gifs/</text>
+        </svg>"""
+        b64_svg = base64.b64encode(placeholder_svg.encode("utf-8")).decode("utf-8")
+        img_uri = f"data:image/svg+xml;base64,{b64_svg}"
+
+    descriptions = {
+        "combo": (
+            "Waktu selisih konfirmasi 2 kontainer yang diangkut 1 truk"
+        ),
+        "dual_cycle": (
+            "**Aktivitas Dual Cycle**\n\n"
+            "Truk melakukan **2 aktivitas dalam 1 ritase** (bongkar lalu langsung muat tanpa jalan kosong). "
+            "Parameter ini menentukan batas waktu maksimal pergerakan siklus dari peletakan hingga pengambilan kontainer."
+        ),
+        "twinlift": (
+            "Selisih waktu konfirmasi 2 kontainer yang diangkat dalam 1 crane yang sama"
+        ),
+    }
+
+    desc = descriptions.get(param_key, "")
+    if img_uri:
+        caption = f"Animasi Aktivitas {param_key.replace('_', ' ').title()}" if is_custom_file else "Placeholder Animasi"
+        return f"{desc}\n\n![{caption}]({img_uri})"
+    return desc
+
+
+def get_parameter_tooltip(param_key: str) -> str:
+    """
+    Menghasilkan teks Markdown untuk parameter help pada st.number_input.
+    Ketika pengguna meng-hover ikon tanda tanya native (?), tooltip akan menampilkan
+    penjelasan singkat mengenai aktivitas operasional serta animasi GIF kustom (dengan auto-caching).
+    """
+    gif_candidates = {
+        "combo": [
+            "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
+            "combo.gif", "combo.webp",
+        ],
+        "dual_cycle": [
+            "gifs/dual_cycle.gif", "gifs/dual_cycle.webp", "gifs/dualcycle.gif", "gifs/dual-cycle.gif", "gifs/dual_cycle.png",
+            "dual_cycle.gif", "dual_cycle.webp",
+        ],
+        "twinlift": [
+            "gifs/twinlift.gif", "gifs/twinlift.webp", "gifs/twin_lift.gif", "gifs/twin-lift.gif", "gifs/twinlift.png",
+            "twinlift.gif", "twinlift.webp",
+        ],
+    }
+    gif_file = find_asset_file(gif_candidates.get(param_key, []))
+    file_sig = f"{gif_file.stat().st_size}_{int(gif_file.stat().st_mtime)}" if gif_file else "0"
+    return _build_parameter_tooltip(param_key, file_sig)
+
+
+
 

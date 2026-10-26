@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .dev_cache/
+.cache/
+**/.cache/
 .streamlit/secrets.toml
 
 # Ignore temporary screenshots in root

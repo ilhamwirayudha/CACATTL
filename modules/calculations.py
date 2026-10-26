@@ -950,6 +950,8 @@ def proses_analisis_lengkap(
     ambang_combo,
     ambang_dual,
     ambang_twinlift,
+    max_gap_dual=180.0,
+    max_gap_combo=30.0,
     progress_callback=None,
 ):
     """
@@ -993,8 +995,14 @@ def proses_analisis_lengkap(
     out_df = gabungkan_hasil(df_combo, events, event_id_map)
     out_df = klasifikasi_dual_murni_campuran(out_df)
     summary = hitung_ringkasan(events, out_df, size_eligible)
+    summary["ambang_combo"] = ambang_combo
+    summary["ambang_dual"] = ambang_dual
+    summary["ambang_twinlift"] = ambang_twinlift
+    summary["max_gap_dual"] = max_gap_dual
+    summary["max_gap_combo"] = max_gap_combo
 
     if progress_callback:
         progress_callback(100, "Analisis komputasi selesai!", "Menyiapkan dashboard visualisasi...")
 
     return out_df, events, summary
+

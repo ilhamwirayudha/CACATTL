@@ -1275,6 +1275,88 @@ button[data-testid="stTab"][aria-selected="true"],
     font-weight: 700 !important;
 }
 
+/* ================================================================ */
+/* ST.RADIO SEBAGAI TAB NAVIGASI PERSISTEN & GLASSMORPHIC           */
+/* ================================================================ */
+div[data-testid="stRadio"] {
+    margin-bottom: 22px !important;
+}
+
+div[data-testid="stRadio"] div[role="radiogroup"] {
+    background: rgba(10, 18, 32, 0.75) !important;
+    backdrop-filter: blur(16px) !important;
+    -webkit-backdrop-filter: blur(16px) !important;
+    border: 1px solid rgba(255, 255, 255, 0.12) !important;
+    border-radius: 14px !important;
+    padding: 6px !important;
+    gap: 8px !important;
+    box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.35) !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    display: inline-flex !important;
+    flex-direction: row !important;
+    align-items: center !important;
+}
+
+div[data-testid="stRadio"] label[data-baseweb="radio"] {
+    border-radius: 10px !important;
+    padding: 10px 22px !important;
+    min-height: 42px !important;
+    height: 42px !important;
+    box-sizing: border-box !important;
+    font-weight: 600 !important;
+    font-size: 0.90rem !important;
+    color: #94a3b8 !important;
+    border: none !important;
+    outline: none !important;
+    transition: all 0.2s ease !important;
+    background: transparent !important;
+    cursor: pointer !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    text-align: center !important;
+    white-space: nowrap !important;
+    margin: 0 !important;
+}
+
+/* Sembunyikan lingkaran radio bullet default */
+div[data-testid="stRadio"] label[data-baseweb="radio"] > div:first-child {
+    display: none !important;
+}
+
+div[data-testid="stRadio"] label[data-baseweb="radio"]:hover {
+    color: #ffffff !important;
+    background: rgba(255, 255, 255, 0.08) !important;
+}
+
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked),
+div[data-testid="stRadio"] label[data-baseweb="radio"][aria-checked="true"] {
+    background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
+    color: #ffffff !important;
+    box-shadow: 0 4px 14px rgba(2, 132, 199, 0.45) !important;
+    border-radius: 10px !important;
+    padding: 10px 22px !important;
+}
+
+div[data-testid="stRadio"] label[data-baseweb="radio"] p,
+div[data-testid="stRadio"] label[data-baseweb="radio"] span,
+div[data-testid="stRadio"] label[data-baseweb="radio"] div[data-testid="stMarkdownContainer"] {
+    margin: 0 !important;
+    padding: 0 !important;
+    font-size: 0.90rem !important;
+    line-height: 1.2 !important;
+    color: inherit !important;
+}
+
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) p,
+div[data-testid="stRadio"] label[data-baseweb="radio"]:has(input:checked) span,
+div[data-testid="stRadio"] label[data-baseweb="radio"][aria-checked="true"] p,
+div[data-testid="stRadio"] label[data-baseweb="radio"][aria-checked="true"] span {
+    color: #ffffff !important;
+    font-weight: 700 !important;
+}
+
 /* Buttons Styling */
 button[kind="primary"] {
     background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%) !important;
@@ -1393,9 +1475,9 @@ div[data-testid="stElementContainer"]:has(#step1-card-marker) {
 }
 
 /* Reset inner column wrappers so only the main outer step container gets card border & background */
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"] div[data-testid="stVerticalBlockBorderWrapper"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"] div[data-testid="stVerticalBlock"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"] div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"] div[data-testid="stVerticalBlock"] {
     background: transparent !important;
     border: none !important;
     border-radius: 0 !important;
@@ -1404,7 +1486,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data
 }
 
 /* Step 1 Card: Symmetrical & Balanced Vertical Padding (Generous breathing room & overflow safe) */
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)) {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) {
     min-height: 104px !important;
     padding: 34px 44px !important;
     box-sizing: border-box !important;
@@ -1412,7 +1494,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has
 }
 
 /* Step 1 Horizontal Layout: Text & Button Vertically Centered Presisi */
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stHorizontalBlock"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stHorizontalBlock"] {
     display: flex !important;
     align-items: center !important;
     justify-content: space-between !important;
@@ -1421,7 +1503,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data
     padding: 0 !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"] {
     display: flex !important;
     flex-direction: column !important;
     justify-content: center !important;
@@ -1430,17 +1512,17 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data
     padding: 0 !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"]:first-child {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"]:first-child {
     justify-content: center !important;
     align-items: flex-start !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) {
     align-items: flex-end !important;
     justify-content: center !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) div[data-testid="stVerticalBlock"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) div[data-testid="stVerticalBlock"] {
     width: fit-content !important;
     max-width: 100% !important;
     display: flex !important;
@@ -1452,7 +1534,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data
     padding: 0 !important;
 }
 
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) div[data-testid="stElementContainer"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has(.artistic-hero)):not(:has(#step2-card-marker)) div[data-testid="stColumn"]:has([data-testid="stFileUploader"]) div[data-testid="stElementContainer"] {
     width: auto !important;
     max-width: 100% !important;
     flex: 0 0 auto !important;
@@ -1500,7 +1582,11 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data
 }
 
 div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"]:last-child {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"]:first-child,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"]:first-child,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn:first-child {
     flex: 1 1 0% !important;
     min-width: 0 !important;
     width: 0 !important;
@@ -1508,8 +1594,23 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data
     justify-content: flex-start !important;
 }
 
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"] > div,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"] > div,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn > div,
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"] div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"] div[data-testid="stVerticalBlockBorderWrapper"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn div[data-testid="stVerticalBlockBorderWrapper"] {
+    width: 100% !important;
+    max-width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    justify-content: flex-start !important;
+}
+
 div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"] div[data-testid="stVerticalBlock"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"]:last-child div[data-testid="stVerticalBlock"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"] div[data-testid="stVerticalBlock"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn div[data-testid="stVerticalBlock"] {
     width: 100% !important;
     max-width: 100% !important;
     display: flex !important;
@@ -1521,15 +1622,57 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data
 }
 
 div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"] div[data-testid="stElementContainer"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="stColumn"]:last-child div[data-testid="stElementContainer"] {
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) div[data-testid="column"] div[data-testid="stElementContainer"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker) .stColumn div[data-testid="stElementContainer"] {
     width: 100% !important;
     max-width: 100% !important;
     flex: 1 1 auto !important;
     display: flex !important;
+    flex-direction: column !important;
     align-items: stretch !important;
     justify-content: flex-start !important;
     margin: 0 !important;
     padding: 0 !important;
+}/* Enhanced Maritime Hover Tooltip for Step 2 Parameters */
+div[data-baseweb="tooltip"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+div[data-baseweb="tooltip"] > div {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+/* Hanya 1 container isi yang memiliki card border & background */
+div[data-testid="stTooltipContent"],
+div[role="tooltip"][data-testid="stTooltipContent"] {
+    width: 394px !important;
+    min-width: 394px !important;
+    max-width: 394px !important;
+    box-sizing: border-box !important;
+    border-radius: 14px !important;
+    background: #0d1627 !important;
+    border: 1px solid rgba(56, 189, 248, 0.35) !important;
+    box-shadow: 0 20px 45px rgba(0, 0, 0, 0.85), 0 0 20px rgba(56, 189, 248, 0.2) !important;
+    padding: 16px 18px !important;
+    color: #e2e8f0 !important;
+    font-size: 0.85rem !important;
+    line-height: 1.5 !important;
+}
+
+div[data-testid="stTooltipContent"] img {
+    border-radius: 8px !important;
+    border: none !important;
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    margin: 10px 0 2px 0 !important;
+    background: transparent !important;
 }
 
 /* Step 3 Columns: Equal Width & Full Expansion */
@@ -1975,6 +2118,7 @@ div[data-testid="stNumberInput"] {
     width: 100% !important;
     min-width: 0 !important;
     max-width: 100% !important;
+    flex: 1 1 100% !important;
     box-sizing: border-box !important;
     background: transparent !important;
     border: none !important;
@@ -2005,6 +2149,7 @@ div[data-testid="stNumberInputContainer"] {
     width: 100% !important;
     min-width: 100% !important;
     max-width: 100% !important;
+    flex: 1 1 100% !important;
     background: rgba(15, 23, 42, 0.8) !important;
     background-color: rgba(15, 23, 42, 0.8) !important;
     border: 1px solid rgba(56, 189, 248, 0.35) !important;
@@ -2103,6 +2248,67 @@ div[data-testid="stNumberInputContainer"] button svg {
     color: currentColor !important;
     width: 14px !important;
     height: 14px !important;
+}
+
+/* Checkbox Styling */
+div[data-testid="stCheckbox"] {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: flex-start !important;
+    min-height: 34px !important;
+    height: 34px !important;
+    margin: 62px 0 0 16px !important;
+    padding: 0 !important;
+}
+
+div[data-testid="stCheckbox"] label {
+    font-family: 'Plus Jakarta Sans', sans-serif !important;
+    font-size: 0.81rem !important;
+    font-weight: 600 !important;
+    color: #e2e8f0 !important;
+    cursor: pointer !important;
+    display: flex !important;
+    align-items: center !important;
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+div[data-testid="stCheckbox"] label:hover {
+    color: #38bdf8 !important;
+}
+
+div[data-testid="stCheckbox"] [data-testid="stTooltipIcon"] {
+    display: none !important;
+}
+
+/* Compact styling khusus input Target Optimal Bulanan */
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) {
+    margin-left: 14px !important;
+    margin-top: 40px !important;
+}
+
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) label {
+    font-size: 0.78rem !important;
+    margin-bottom: 3px !important;
+}
+
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) div[data-testid="stNumberInputContainer"] {
+    height: 34px !important;
+    border-radius: 8px !important;
+}
+
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) input {
+    font-size: 0.84rem !important;
+    padding: 0 8px !important;
+}
+
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) button {
+    padding: 0 6px !important;
+}
+
+div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) button svg {
+    width: 11px !important;
+    height: 11px !important;
 }
 
 /* Selectbox Styling */
