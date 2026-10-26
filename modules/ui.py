@@ -1988,7 +1988,7 @@ def _build_parameter_tooltip(param_key: str, file_sig: str) -> str:
 
     descriptions = {
         "combo": (
-            "Waktu selisih konfirmasi 2 kontainer yang diangkut 1 truk"
+            "Selisih waktu konfirmasi 2 kontainer yang diangkut 1 truk."
         ),
         "dual_cycle": (
             "**Aktivitas Dual Cycle**\n\n"
@@ -1996,7 +1996,7 @@ def _build_parameter_tooltip(param_key: str, file_sig: str) -> str:
             "Parameter ini menentukan batas waktu maksimal pergerakan siklus dari peletakan hingga pengambilan kontainer."
         ),
         "twinlift": (
-            "Selisih waktu konfirmasi 2 kontainer yang diangkat dalam 1 crane yang sama"
+            "Selisih waktu konfirmasi 2 kontainer yang diangkat dalam 1 crane yang sama."
         ),
     }
 

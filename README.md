@@ -60,13 +60,13 @@ graph LR
    - Sistem akan mengeksekusi algoritma multi-layer secara asinkron dalam hitungan detik.
    - Halaman akan **otomatis bergeser mulus (*smooth auto-scroll*)** ke bagian Langkah 3.
 
-### **Langkah 3: Executive KPI & Evaluasi Interaktif**
-Hasil langsung disajikan ke dalam kartu KPI utama dan 4 tab analitik terdedikasi:
+### **Langkah 3: Executive KPI, Simulasi Efisiensi & Evaluasi Interaktif**
+Hasil komputasi langsung disajikan ke dalam kartu KPI utama dan 4 tab analitik terdedikasi:
 - **Kartu Ringkasan KPI**: Menampilkan Total Kontainer, Rasio Dual Cycle (%), Utilisasi Twin Lift (%), dan Total Ritase Truk Terbentuk.
-- **Tab 1 — Dual Cycle**: Diagram donat persentase siklus, grafik batang perbandingan kontainer, dan grafik tren bulanan efisiensi siklus ganda.
-- **Tab 2 — Twin Lift**: Distribusi kontainer Twin Lift vs Single Lift serta tren utilisasi crane bulanan.
-- **Tab 3 — Per Vessel**: Dropdown pemilihan kapal (*VES_ID*) untuk membedah kinerja alat per kunjungan kapal sandar.
-- **Tab 4 — Download Hasil Analisis**: Pratinjau tabel hasil rekonstruksi (menampilkan 1.000 baris pertama) serta tombol unduh dataset lengkap berformat **Excel (`.xlsx`)**.
+- **Tab 1 — Dual Cycle**: Diagram donat persentase siklus, tombol inspeksi pop-up modal detail event (*Dual Cycle* & *Non Dual*), grafik breakdown bulanan dengan fitur **Target Optimal (%)** dan **Tampilkan Garis Target** interaktif (*isolated re-render* via `@st.fragment`), serta breakdown performa per shift kerja.
+- **Tab 2 — Twin Lift**: Distribusi kontainer Twin Lift vs Single Lift, breakdown bulanan Combo vs Single (% kontainer 20ft), tren utilisasi Twinlift bulanan, serta tabel performa Twinlift per Quay Crane (QC).
+- **Tab 3 — Simulasi**: Simulator interaktif potensi efisiensi operasional Dual Cycle (*Two-Way Load*). Menghitung eliminasi ritase truk kosong (*truck trips saved*), estimasi penghematan volume bahan bakar solar (Liter), penghematan biaya finansial (Rupiah), serta kurva proyeksi sensitivitas penetrasi.
+- **Tab 4 — Download Hasil Analisis**: Pratinjau dataset hasil rekonstruksi siklus lengkap (1.000 baris pertama) serta tombol unduh file spreadsheet **Excel (`.xlsx`)** bersih siap saji untuk pelaporan manajemen.
 
 ---
 
@@ -148,6 +148,9 @@ Desain dashboard mengadopsi estetika **Maritime Dark Glassmorphism** kelas eksek
 
 ### C. Keunggulan Interaksi Visual
 - **Seamless Full-Bleed Layout**: Menghilangkan seluruh margin dan padding default Streamlit yang mengganggu sehingga dasbor terasa seperti aplikasi desktop/SaaS kustom mandiri.
+- **Isolated Component Fragments (`@st.fragment`)**: Pembaruan komponen grafik dan kontrol parameter garis target berjalan independen tanpa reload halaman penuh (*zero page-reload*) dan menjaga posisi scroll layar tetap stabil.
+- **Modal Dialog Protection**: Jendela dialog detail rincian event dilindungi dari penutupan tidak sengaja (*backdrop click & ESC key protection*), hanya dapat ditutup via tombol silang resmi.
+- **Animated Parameter Tooltips**: Tooltip pada parameter input menyertakan visualisasi animasi GIF operasional (seperti mekanisme *Twin Lift*) untuk memudahkan pemahaman personil lapangan.
 - **Fluid Micro-Animations**: Efek *hover elevate*, transisi bayangan lembut, dan penanda tab aktif bergradien biru yang menyala lembut.
 - **Smooth Auto-Scroll**: Pengalihan viewport otomatis yang mulus dari kontrol parameter Langkah 2 menuju hasil analitik Langkah 3 setelah komputasi selesai.
 
@@ -166,6 +169,7 @@ Implementasi dashboard CACA memberikan dampak nyata bagi operasional **Pelindo T
   Kecepatan Analisis     10 - 30 Menit (Sering Hang)  1 - 3 Detik (Real-Time)
   Aksesibilitas          Terbatas di 1 PC Offline    Multi-User Web Browser
   Visualisasi            Tabel Angka Statis          Grafik Interaktif & KPI
+  Simulasi Finansial     Perhitungan Manual          Simulasi BBM & Efisiensi Otomatis
   Presisi Perhitungan    Tergantung Operator         100% Terkalibrasi Standar
   Dukungan Ekspor        Terkunci di Workbook Lama   Excel (.xlsx) Siap Lapor
 =============================================================================
@@ -178,32 +182,37 @@ Dengan memantau utilisasi **Twin Lift** secara harian dan per kapal, tim perenca
 Setiap siklus yang berhasil diubah menjadi **Dual Cycle** memangkas satu perjalanan truk kosong dari dermaga ke lapangan penumpukan. Ini mengurangi kepadatan lalu lintas di dermaga (*quay congestion*) dan mempercepat *turnaround time* armada truk.
 
 ### 3. Penurunan Konsumsi BBM & Emisi Karbon (Dukungan *Green Port*)
-Pengurangan jarak tempuh truk tanpa muatan secara langsung berkontribusi pada penurunan konsumsi bahan bakar solar industri dan emisi karbon $CO_2$, memperkuat komitmen Pelindo TTL sebagai pelabuhan ramah lingkungan terdepan.
+Melalui simulator efisiensi di Tab 3, estimasi penghematan BBM solar (Liter) dan efisiensi biaya operasional (Rp) dapat diproyeksikan secara akurat, memperkuat komitmen Pelindo TTL sebagai pelabuhan hijau (*Green Port*) bertaraf internasional.
 
 ---
 
 ## 📂 7. Struktur Direktori Repositori
 
 ```text
-ttl-dual-cycle-twin-lift-dashboard/
+caca-teluklamong-dashboard/
 ├── .gitignore                      # File pengecualian Git (cache, bytecode, secrets)
 ├── README.md                       # Dokumentasi komprehensif proyek
 ├── app.py                          # Entry-point utama aplikasi Streamlit
 ├── requirements.txt                # Daftar dependensi pustaka Python
-├── data_SEGO170_stack.xlsx         # Sampel dataset operasional untuk pengujian
 ├── assets/                         # Aset visual, styling, dan multimedia
 │   ├── DJI_20250716133943_0169_D.JPG # Foto udara dermaga Terminal Teluk Lamong
-│   ├── caca-logo.png               # Logo 3D resmi inovasi CACA
+│   ├── caca-logo.png               # Logo resmi inovasi CACA
 │   ├── logo_caca_text.png          # Logo variasi teks
 │   ├── pelindo.png                 # Logo resmi PT Pelindo
 │   ├── style.css                   # Custom CSS styling (dark glassmorphism)
-│   └── transition.js               # Skrip pendukung transisi interaktif
+│   ├── transition.js               # Skrip pendukung transisi & scroll restoration
+│   └── gifs/                       # Animasi media operasional
+│       ├── twinlift.gif            # Animasi peragaan mekanisme Twin Lift
+│       └── README.md               # Panduan aset GIF
 ├── modules/                        # Arsitektur modular backend & analitik
 │   ├── __init__.py                 # Inisialisasi package Python
 │   ├── calculations.py             # Logika rekonstruksi siklus, combo, dual, & twin
 │   ├── charts.py                   # Generator visualisasi grafik Plotly kustom
 │   ├── data_loader.py              # Parser data multi-format & deteksi sheet
-│   └── ui.py                       # Template engine Jinja2, base64 encoder, styling
+│   └── ui.py                       # Template engine Jinja2, dialog modal, styling
+├── references/                     # Dokumen acuan & formula bisnis
+│   ├── Potensi Efisiensi.xlsx      # Acuan perhitungan efisiensi BBM & ritase
+│   └── README.md                   # Dokumentasi formula & parameter acuan
 └── templates/                      # Template komponen HTML antarmuka
     ├── hero.html                   # Banner hero sambutan & identitas pelabuhan
     ├── kpi_card.html               # Komponen kartu metrik eksekutif
@@ -227,8 +236,8 @@ Untuk menjalankan dashboard di komputer lokal Anda:
 
 ### 1. Clone Repositori
 ```bash
-git clone https://github.com/ilhamwirayudha/ttl-dual-cycle-twin-lift-dashboard.git
-cd ttl-dual-cycle-twin-lift-dashboard
+git clone https://github.com/ilhamwirayudha/CACATTL.git
+cd CACATTL
 ```
 
 ### 2. Buat Virtual Environment (Opsional tapi Direkomendasikan)
@@ -259,7 +268,7 @@ Aplikasi ini telah dioptimalkan secara penuh untuk di-hosting di **Streamlit Com
 1. Buka **[share.streamlit.io](https://share.streamlit.io/)** dan hubungkan akun GitHub Anda.
 2. Klik tombol **New App**.
 3. Masukkan rincian repositori:
-   - **Repository**: `ilhamwirayudha/ttl-dual-cycle-twin-lift-dashboard`
+   - **Repository**: `ilhamwirayudha/CACATTL`
    - **Branch**: `main`
    - **Main file path**: `app.py`
 4. Klik **Deploy!** — Aplikasi akan aktif dan dapat diakses secara publik dalam waktu 1–2 menit.

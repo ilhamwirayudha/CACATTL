@@ -114,6 +114,151 @@ def get_global_session_store() -> dict:
 session_store = get_global_session_store()
 has_stored_session = session_store.get("file_bytes") is not None
 
+
+# ----------------------------------------------------------------
+# Komponen Fragment: Breakdown Bulanan Dual Cycle vs Non Dual
+# Diisolasi dengan @st.fragment agar interaksi input & checkbox garis target
+# tidak memicu full rerun halaman dan menjaga posisi scroll pengguna tetap stabil.
+# ----------------------------------------------------------------
+@st.fragment
+def render_monthly_breakdown_section(monthly: pd.DataFrame):
+    if len(monthly) == 0:
+        return
+
+    render_html(
+        """
+        <style>
+        div[data-testid="stHorizontalBlock"]:has(input[aria-label*="Target Optimal"]) {
+            justify-content: flex-start !important;
+            gap: 16px !important;
+            align-items: flex-start !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:has(input[aria-label*="Target Optimal"]),
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:has(input[aria-label*="Target Optimal"]),
+        div[data-testid="stColumn"]:has(input[aria-label*="Target Optimal"]),
+        div[data-testid="column"]:has(input[aria-label*="Target Optimal"]) {
+            flex: 0 0 345px !important;
+            width: 345px !important;
+            max-width: 345px !important;
+            min-width: 345px !important;
+        }
+        div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) {
+            margin-left: 14px !important;
+            margin-top: 40px !important;
+            width: 330px !important;
+            max-width: 330px !important;
+        }
+        div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) label,
+        div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) label p,
+        div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) [data-testid="stWidgetLabel"] p {
+            font-family: 'Plus Jakarta Sans', sans-serif !important;
+            font-size: 14px !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            margin-bottom: 5px !important;
+            white-space: nowrap !important;
+        }
+        div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) div[data-testid="stNumberInputContainer"] {
+            height: 34px !important;
+            width: 330px !important;
+            max-width: 330px !important;
+            border-radius: 8px !important;
+        }
+        div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker) div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:has(div[data-testid="stCheckbox"]),
+        div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:has(div[data-testid="stCheckbox"]),
+        div[data-testid="stColumn"]:has(div[data-testid="stCheckbox"]),
+        div[data-testid="column"]:has(div[data-testid="stCheckbox"]) {
+            flex: 0 0 auto !important;
+            width: auto !important;
+            min-width: auto !important;
+            max-width: none !important;
+        }
+        div[data-testid="stCheckbox"] {
+            margin-left: 0 !important;
+            margin-top: 62px !important;
+        }
+        div[data-testid="stCheckbox"] label,
+        div[data-testid="stCheckbox"] label p,
+        div[data-testid="stCheckbox"] label span {
+            font-family: 'Plus Jakarta Sans', sans-serif !important;
+            font-size: 14px !important;
+            font-weight: 700 !important;
+            color: #ffffff !important;
+            white-space: nowrap !important;
+        }
+        </style>
+        <div style="height:36px; min-height:36px; line-height:36px; display:block; clear:both;">&nbsp;</div>
+        """
+    )
+    col_m_input, col_m_check, col_m_space = st.columns([345, 260, 1000], gap="small")
+    with col_m_input:
+        if "monthly_target_optimal_pct" not in st.session_state:
+            st.session_state["monthly_target_optimal_pct"] = 50.0
+        target_optimal_pct = st.number_input(
+            "Target Optimal (%)",
+            min_value=0.0,
+            max_value=100.0,
+            step=0.5,
+            format="%.1f",
+            key="monthly_target_optimal_pct",
+            disabled=not st.session_state.get("show_monthly_target_line", True),
+        )
+    with col_m_check:
+        if "show_monthly_target_line" not in st.session_state:
+            st.session_state["show_monthly_target_line"] = True
+        show_target_line = st.checkbox(
+            "Tampilkan Garis Target",
+            key="show_monthly_target_line",
+        )
+
+    monthly_dual_pct = monthly.melt(
+        id_vars="Bulan",
+        value_vars=["pct_dual", "pct_non_dual"],
+        var_name="Kategori",
+        value_name="Persentase",
+    )
+    monthly_dual_pct["Kategori"] = monthly_dual_pct["Kategori"].map(
+        {"pct_dual": "Dual Cycle", "pct_non_dual": "Non Dual"}
+    )
+    monthly_dual_pct["Persentase"] = monthly_dual_pct["Persentase"] * 100
+    monthly_dual_pct["Label"] = monthly_dual_pct["Persentase"].apply(lambda p: format_percent(p, 1))
+
+    fig_month_dual = px.bar(
+        monthly_dual_pct,
+        x="Bulan",
+        y="Persentase",
+        color="Kategori",
+        barmode="stack",
+        title="Breakdown Bulanan: Dual Cycle vs Non Dual (%)",
+        color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
+        text="Label",
+    )
+    fig_month_dual.update_traces(textposition="inside", insidetextanchor="middle")
+    fig_month_dual.update_layout(
+        xaxis=dict(type="category"),
+        yaxis=dict(title="% dari Total Ritase", range=[0, 100]),
+    )
+
+    # Garis batas merah target optimal melintang dari kiri ke kanan jika checklist aktif & target ditentukan (> 0)
+    if show_target_line and target_optimal_pct is not None and target_optimal_pct > 0:
+        fig_month_dual.add_hline(
+            y=target_optimal_pct,
+            layer="above",
+            line_dash="dash",
+            line_color="#EF4444",
+            line_width=2.5,
+            annotation_text=f"Target: {target_optimal_pct:g}%",
+            annotation_position="top left",
+            annotation_font=dict(family="Plus Jakarta Sans", size=11, color="#ffffff"),
+            annotation_bgcolor="rgba(239, 68, 68, 0.85)",
+            annotation_bordercolor="rgba(239, 68, 68, 1.0)",
+            annotation_borderwidth=1,
+        )
+
+    apply_glass_theme(fig_month_dual)
+    st.plotly_chart(fig_month_dual, width="stretch")
+
+
 # ================================================================
 # LANGKAH 1 (ATAS): Unggah File Data Operasional
 # ================================================================
@@ -706,87 +851,7 @@ with st.container(border=True):
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
         if len(monthly) > 0:
-            render_html(
-                """
-                <style>
-                div[data-testid="stNumberInput"]:has(input[aria-label*="Target Optimal"]) {
-                    margin-left: 14px !important;
-                    margin-top: 40px !important;
-                }
-                div[data-testid="stCheckbox"] {
-                    margin-left: 16px !important;
-                    margin-top: 62px !important;
-                }
-                </style>
-                <div style="height:36px; min-height:36px; line-height:36px; display:block; clear:both;">&nbsp;</div>
-                """
-            )
-            col_m_input, col_m_check, col_m_space = st.columns([0.75, 1.6, 3.65])
-            with col_m_input:
-                if "monthly_target_optimal_pct" not in st.session_state:
-                    st.session_state["monthly_target_optimal_pct"] = 50.0
-                target_optimal_pct = st.number_input(
-                    "Target Optimal (%)",
-                    min_value=0.0,
-                    max_value=100.0,
-                    step=0.5,
-                    format="%.1f",
-                    key="monthly_target_optimal_pct",
-                    disabled=not st.session_state.get("show_monthly_target_line", True),
-                )
-            with col_m_check:
-                show_target_line = st.checkbox(
-                    "Tampilkan Garis Target",
-                    value=st.session_state.get("show_monthly_target_line", True),
-                    key="show_monthly_target_line",
-                )
-
-            monthly_dual_pct = monthly.melt(
-                id_vars="Bulan",
-                value_vars=["pct_dual", "pct_non_dual"],
-                var_name="Kategori",
-                value_name="Persentase",
-            )
-            monthly_dual_pct["Kategori"] = monthly_dual_pct["Kategori"].map(
-                {"pct_dual": "Dual Cycle", "pct_non_dual": "Non Dual"}
-            )
-            monthly_dual_pct["Persentase"] = monthly_dual_pct["Persentase"] * 100
-            monthly_dual_pct["Label"] = monthly_dual_pct["Persentase"].apply(lambda p: format_percent(p, 1))
-
-            fig_month_dual = px.bar(
-                monthly_dual_pct,
-                x="Bulan",
-                y="Persentase",
-                color="Kategori",
-                barmode="stack",
-                title="Breakdown Bulanan: Dual Cycle vs Non Dual (%)",
-                color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
-                text="Label",
-            )
-            fig_month_dual.update_traces(textposition="inside", insidetextanchor="middle")
-            fig_month_dual.update_layout(
-                xaxis=dict(type="category"),
-                yaxis=dict(title="% dari Total Ritase", range=[0, 100]),
-            )
-
-            # Garis batas merah target optimal melintang dari kiri ke kanan jika checklist aktif & target ditentukan (> 0)
-            if show_target_line and target_optimal_pct is not None and target_optimal_pct > 0:
-                fig_month_dual.add_hline(
-                    y=target_optimal_pct,
-                    layer="above",
-                    line_dash="dash",
-                    line_color="#EF4444",
-                    line_width=2.5,
-                    annotation_text=f"Target: {target_optimal_pct:g}%",
-                    annotation_position="top left",
-                    annotation_font=dict(family="Plus Jakarta Sans", size=11, color="#ffffff"),
-                    annotation_bgcolor="rgba(239, 68, 68, 0.85)",
-                    annotation_bordercolor="rgba(239, 68, 68, 1.0)",
-                    annotation_borderwidth=1,
-                )
-
-            apply_glass_theme(fig_month_dual)
-            st.plotly_chart(fig_month_dual, width="stretch")
+            render_monthly_breakdown_section(monthly)
 
         if len(monthly_20ft) > 0:
             # FIX LOGIKA: % Combo/Single bulanan sekarang dihitung dari basis
@@ -1183,18 +1248,17 @@ with st.container(border=True):
 
             # Sinkronisasi nilai default isian ketik dengan data file yang sedang aktif dianalisis
             current_file_key = f"{act_total_ritase}_{act_dual_count}_{act_single_count}"
-            if st.session_state.get("sim_synced_file_key") != current_file_key:
+            if st.session_state.get("sim_synced_file_key") != current_file_key or "sim_penetrasi_input" not in st.session_state:
                 st.session_state["sim_synced_file_key"] = current_file_key
                 st.session_state["sim_penetrasi_input"] = float(round(act_pct_dual, 1))
 
-            def_penetrasi = float(st.session_state.get("sim_penetrasi_input", round(act_pct_dual, 1)))
-            def_penetrasi = max(0.0, min(100.0, def_penetrasi))
+            # Pastikan nilai di session_state berada dalam batas valid 0.0 - 100.0
+            st.session_state["sim_penetrasi_input"] = max(0.0, min(100.0, float(st.session_state["sim_penetrasi_input"])))
 
             sim_penetrasi_pct = st.number_input(
                 "Target Penetrasi (%)",
                 min_value=0.0,
                 max_value=100.0,
-                value=def_penetrasi,
                 step=0.1,
                 format="%.1f",
                 key="sim_penetrasi_input",

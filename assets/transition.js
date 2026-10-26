@@ -242,6 +242,12 @@
 
                 win.addEventListener('scroll', saveScrollPos, { passive: true });
                 doc.addEventListener('scroll', saveScrollPos, { passive: true, capture: true });
+                doc.addEventListener('pointerdown', function() {
+                    var y = win.getCurrentScrollY ? win.getCurrentScrollY() : 0;
+                    if (y > 60) {
+                        try { sessionStorage.setItem('caca_scroll_pos', y); } catch(e) {}
+                    }
+                }, { passive: true, capture: true });
                 win.addEventListener('beforeunload', function() {
                     var y = win.getCurrentScrollY ? win.getCurrentScrollY() : 0;
                     if (y > 60) {
