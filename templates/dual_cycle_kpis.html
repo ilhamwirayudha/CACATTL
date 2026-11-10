@@ -14,16 +14,6 @@
                         <span class="pill-text-collapsed">Lihat Rincian ▾</span>
                         <span class="pill-text-expanded">Tutup ▴</span>
                     </div>
-                    <div class="kpi-tooltip-container">
-                        <span class="kpi-tooltip-trigger" onclick="event.stopPropagation(); event.preventDefault();"
-                            aria-label="Penjelasan Total Petikemas">
-                            <span class="kpi-help-icon">?</span>
-                        </span>
-                        <div class="kpi-tooltip-bubble" role="tooltip">
-                            <div class="kpi-tooltip-text">Total keseluruhan jumlah petikemas (20ft, 40ft, 45ft) baik
-                                bongkar (DISC) maupun muat (LOAD).</div>
-                        </div>
-                    </div>
                 </div>
             </div>
             <div class="kpi-value">{{ container_total }}</div>
@@ -37,16 +27,6 @@
                 <div class="kpi-card variant-amber kpi-breakdown-card">
                     <div class="kpi-header">
                         <span class="kpi-label">CONTAINER LOAD</span>
-                        <div class="kpi-header-actions">
-                            <div class="kpi-tooltip-container">
-                                <span class="kpi-tooltip-trigger" aria-label="Penjelasan Container LOAD">
-                                    <span class="kpi-help-icon">?</span>
-                                </span>
-                                <div class="kpi-tooltip-bubble" role="tooltip">
-                                    <div class="kpi-tooltip-text">Jumlah petikemas dengan status muat (LOAD).</div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <div class="kpi-value">{{ container_load }}</div>
                     <div class="kpi-subtext">Total Muat</div>
@@ -56,16 +36,6 @@
                 <div class="kpi-card variant-teal kpi-breakdown-card">
                     <div class="kpi-header">
                         <span class="kpi-label">CONTAINER DISC</span>
-                        <div class="kpi-header-actions">
-                            <div class="kpi-tooltip-container">
-                                <span class="kpi-tooltip-trigger" aria-label="Penjelasan Container DISC">
-                                    <span class="kpi-help-icon">?</span>
-                                </span>
-                                <div class="kpi-tooltip-bubble" role="tooltip">
-                                    <div class="kpi-tooltip-text">Jumlah petikemas dengan status bongkar (DISC).</div>
-                                </div>
-                            </div>
-                        </div>
                     </div>
                     <div class="kpi-value">{{ container_disc }}</div>
                     <div class="kpi-subtext">Total Bongkar</div>
@@ -77,17 +47,6 @@
         <div class="kpi-card variant-purple kpi-ritase-card">
             <div class="kpi-header">
                 <span class="kpi-label">TOTAL RITASE</span>
-                <div class="kpi-header-actions">
-                    <div class="kpi-tooltip-container">
-                        <span class="kpi-tooltip-trigger" aria-label="Penjelasan Total Ritase">
-                            <span class="kpi-help-icon">?</span>
-                        </span>
-                        <div class="kpi-tooltip-bubble" role="tooltip">
-                            <div class="kpi-tooltip-text">Jumlah seluruh pergerakan truk
-                                yang membawa kontainer dari dermaga dan lapangan.</div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="kpi-value">{{ total_event }}</div>
             <div class="kpi-subtext">Ritase Truk</div>
@@ -100,18 +59,6 @@
         <div class="kpi-card variant-blue">
             <div class="kpi-header">
                 <span class="kpi-label">DUAL CYCLE</span>
-                <div class="kpi-header-actions">
-                    <div class="kpi-tooltip-container">
-                        <span class="kpi-tooltip-trigger" aria-label="Penjelasan Dual Cycle">
-                            <span class="kpi-help-icon">?</span>
-                        </span>
-                        <div class="kpi-tooltip-bubble" role="tooltip">
-                            <div class="kpi-tooltip-text">Jumlah pergerakan truk yang membawa kontainer dalam satu
-                                ritase
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="kpi-value">{{ total_dual }}</div>
         </div>
@@ -120,17 +67,6 @@
         <div class="kpi-card variant-slate">
             <div class="kpi-header">
                 <span class="kpi-label">NON DUAL</span>
-                <div class="kpi-header-actions">
-                    <div class="kpi-tooltip-container">
-                        <span class="kpi-tooltip-trigger" aria-label="Penjelasan Non Dual">
-                            <span class="kpi-help-icon">?</span>
-                        </span>
-                        <div class="kpi-tooltip-bubble" role="tooltip">
-                            <div class="kpi-tooltip-text">Truk yang membawa kontainer pada saat muat atau bongkar saja
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="kpi-value">{{ total_single }}</div>
         </div>
@@ -139,18 +75,6 @@
         <div class="kpi-card variant-blue">
             <div class="kpi-header">
                 <span class="kpi-label">% DUAL CYCLE</span>
-                <div class="kpi-header-actions">
-                    <div class="kpi-tooltip-container">
-                        <span class="kpi-tooltip-trigger" aria-label="Penjelasan % Dual Cycle">
-                            <span class="kpi-help-icon">?</span>
-                        </span>
-                        <div class="kpi-tooltip-bubble" role="tooltip">
-                            <div class="kpi-tooltip-text">Persentase ritase Dual Cycle terhadap total ritase truk
-                                operasional (Jumlah Dual Cycle ÷ Total Ritase × 100%).
-                            </div>
-                        </div>
-                    </div>
-                </div>
             </div>
             <div class="kpi-value">{{ pct_dual_formatted }}</div>
         </div>

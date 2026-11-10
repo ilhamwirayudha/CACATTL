@@ -27,13 +27,18 @@ st.set_page_config(
 )
 
 import gc
+import importlib
 import modules.charts
 import modules.ui
 
+importlib.reload(modules.ui)
+
 from modules.calculations import (
+    layer2_dual,
     AMBANG_COMBO_MENIT_DEFAULT,
     AMBANG_DUAL_MENIT_DEFAULT,
     AMBANG_TWINLIFT_MENIT_DEFAULT,
+    CRANE_INTERNASIONAL_SUFFIX,
     SIZE_ELIGIBLE,
     compute_period_bounds,
     extract_period_options_from_events,
@@ -115,8 +120,74 @@ session_store = get_global_session_store()
 has_stored_session = session_store.get("file_bytes") is not None
 
 
+@st.cache_data(show_spinner=False)
+def hitung_dual_count_simulasi(events_df: pd.DataFrame, ambang_val: float) -> int:
+    """
+    Menghitung jumlah ritase Dual Cycle untuk ambang tertentu secara cepat dan terisolasi.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
+    res = layer2_dual(events_df.copy(), float(ambang_val))
+    return int((res["STATUS"] == "Dual Cycle").sum())
+
+
+@st.cache_data(show_spinner=False)
+def hitung_rentang_ambang_file(events_df: pd.DataFrame, default_ambang: float = 30.0) -> tuple[int, int, int]:
+    """
+    Mendeteksi batas minimum dan maksimum rentang jeda waktu (gap) pergantian aktivitas
+    (DISC ⇄ LOAD) secara riil dari data file yang terupload untuk konfigurasi slider simulasi.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
+    def_val = int(round(default_ambang))
+    if events_df is None or len(events_df) == 0:
+        return 5, 120, def_val
+
+    ev = events_df.reset_index(drop=True)
+    cols = ["CAR_CHE_ID", "START_TS", "END_TS", "ACTIVITY"]
+    if not all(c in ev.columns for c in cols):
+        return 5, 120, def_val
+
+    start = pd.to_datetime(ev["START_TS"]).to_numpy()
+    end = pd.to_datetime(ev["END_TS"]).to_numpy()
+    activity = ev["ACTIVITY"].to_numpy()
+    truck_positions = ev.groupby("CAR_CHE_ID").indices
+
+    gaps = []
+    for _, pos in truck_positions.items():
+        pos_sorted = sorted(pos, key=lambda p: start[p])
+        m = len(pos_sorted)
+        for a in range(m - 1):
+            i = pos_sorted[a]
+            k = pos_sorted[a + 1]
+            if activity[i] != activity[k]:
+                gap = (start[k] - end[i]) / np.timedelta64(1, "m")
+                # Filter gap logis dalam satu siklus operasional (<= 360 menit / 6 jam)
+                if 0 <= gap <= 360:
+                    gaps.append(gap)
+
+    if not gaps:
+        return 5, 120, def_val
+
+    gaps_arr = np.array(gaps)
+    # Batas bawah diambil dari persentil ke-5 data jeda riil (dibulatkan ke kelipatan 5 terdekat)
+    p5 = np.percentile(gaps_arr, 5)
+    min_calc = int(np.floor(p5 / 5.0) * 5)
+    min_bound = max(5, min_calc)
+    min_bound = min(min_bound, def_val)
+
+    # Batas atas diambil dari persentil ke-95 data jeda riil (dibulatkan ke kelipatan 5 terdekat)
+    p95 = np.percentile(gaps_arr, 95)
+    max_calc = int(np.ceil(p95 / 5.0) * 5)
+    max_bound = max(max_calc, def_val + 10, min_bound + 15)
+    max_bound = min(max_bound, 240)
+
+    if max_bound <= min_bound:
+        max_bound = min_bound + 15
+
+    return min_bound, max_bound, def_val
+
+
 # ----------------------------------------------------------------
-# Komponen Fragment: Breakdown Bulanan Dual Cycle vs Non Dual
+# Komponen Fragment: Breakdown Bulanan Dual Cycle vs Non Dual & Shift
 # Diisolasi dengan @st.fragment agar interaksi input & checkbox garis target
 # tidak memicu full rerun halaman dan menjaga posisi scroll pengguna tetap stabil.
 # ----------------------------------------------------------------
@@ -257,6 +328,88 @@ def render_monthly_breakdown_section(monthly: pd.DataFrame):
 
     apply_glass_theme(fig_month_dual)
     st.plotly_chart(fig_month_dual, width="stretch")
+
+
+@st.fragment
+def render_shift_breakdown_section(shift_df: pd.DataFrame):
+    if len(shift_df) == 0:
+        st.info("Tidak ada data shift pada hasil analisis ini.")
+        return
+
+    render_html(
+        """
+        <div style="height:36px; min-height:36px; line-height:36px; display:block; clear:both;">&nbsp;</div>
+        """
+    )
+    col_s_input, col_s_check, col_s_space = st.columns([345, 260, 1000], gap="small")
+    with col_s_input:
+        if "shift_target_optimal_pct" not in st.session_state:
+            st.session_state["shift_target_optimal_pct"] = 50.0
+        shift_target_optimal_pct = st.number_input(
+            "Target Optimal (%)",
+            min_value=0.0,
+            max_value=100.0,
+            step=0.5,
+            format="%.1f",
+            key="shift_target_optimal_pct",
+            disabled=not st.session_state.get("show_shift_target_line", True),
+        )
+    with col_s_check:
+        if "show_shift_target_line" not in st.session_state:
+            st.session_state["show_shift_target_line"] = True
+        show_shift_target_line = st.checkbox(
+            "Tampilkan Garis Target",
+            key="show_shift_target_line",
+        )
+
+    shift_pct = shift_df.melt(
+        id_vars="SHIFT",
+        value_vars=["dual", "non_dual"],
+        var_name="Kategori",
+        value_name="Jumlah",
+    )
+    shift_pct["Kategori"] = shift_pct["Kategori"].map(
+        {"dual": "Dual Cycle", "non_dual": "Non Dual"}
+    )
+    shift_pct["Total_Shift"] = shift_pct.groupby("SHIFT")["Jumlah"].transform("sum")
+    shift_pct["Persen"] = np.where(
+        shift_pct["Total_Shift"] > 0, shift_pct["Jumlah"] / shift_pct["Total_Shift"] * 100, 0
+    )
+    shift_pct["Label"] = shift_pct["Persen"].apply(lambda p: format_percent(p, 1))
+
+    fig_shift = px.bar(
+        shift_pct,
+        x="SHIFT",
+        y="Persen",
+        color="Kategori",
+        barmode="stack",
+        title="Dual Cycle vs Non Dual per Shift (%)",
+        color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
+        text="Label",
+    )
+    fig_shift.update_traces(textposition="inside", insidetextanchor="middle")
+    fig_shift.update_layout(
+        xaxis=dict(title=""),
+        yaxis=dict(title="% dari Total Ritase", range=[0, 100]),
+    )
+
+    if show_shift_target_line and shift_target_optimal_pct is not None and shift_target_optimal_pct > 0:
+        fig_shift.add_hline(
+            y=shift_target_optimal_pct,
+            layer="above",
+            line_dash="dash",
+            line_color="#EF4444",
+            line_width=2.5,
+            annotation_text=f"Target: {shift_target_optimal_pct:g}%",
+            annotation_position="top left",
+            annotation_font=dict(family="Plus Jakarta Sans", size=11, color="#ffffff"),
+            annotation_bgcolor="rgba(239, 68, 68, 0.85)",
+            annotation_bordercolor="rgba(239, 68, 68, 1.0)",
+            annotation_borderwidth=1,
+        )
+
+    apply_glass_theme(fig_shift)
+    st.plotly_chart(fig_shift, width="stretch")
 
 
 # ================================================================
@@ -490,6 +643,14 @@ with st.container(border=True):
         "ts_h": cols[guess(cols, ["stack_unstack", "unstack_stack", "waktu", "time", "date"])],
     }
 
+    # Pemetaan Kolom No Kontainer (CTR_NO)
+    ctr_no_keywords = ["ctr_no", "container_no", "no_container", "container", "kontainer"]
+    ctr_no_match = guess(cols, ctr_no_keywords, default_idx=-1)
+    if ctr_no_match >= 0 and cols[ctr_no_match] not in [col_map["size"], col_map["truck"], col_map["ves_id"]]:
+        col_map["ctr_no"] = cols[ctr_no_match]
+    else:
+        col_map["ctr_no"] = None
+
     # Pemetaan Kolom Crane (QC) — dipakai sebagai syarat tambahan 'sama crane'
     # pada deteksi Twinlift, serta laporan performa Twinlift per Crane.
     # Dikecualikan dari kandidat: kolom yang sudah dipakai sebagai kolom truk
@@ -563,10 +724,7 @@ if run:
         if init_range is not None:
             r_start, r_end = init_range
             ts_col = col_map["ts_g"]
-            ts_series = pd.to_datetime(raw_to_process[ts_col], errors="coerce", dayfirst=True)
-            if ts_series.isna().any() and col_map.get("ts_h"):
-                ts_h_series = pd.to_datetime(raw_to_process[col_map["ts_h"]], errors="coerce", dayfirst=True)
-                ts_series = ts_series.fillna(ts_h_series)
+            ts_series = pd.to_datetime(raw_to_process[ts_col], errors="coerce")
             start_dt = pd.to_datetime(r_start)
             end_dt = pd.to_datetime(r_end) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
             date_mask = (ts_series >= start_dt) & (ts_series <= end_dt)
@@ -768,7 +926,7 @@ with st.container(border=True):
             )
 
             # Tombol aksi langsung untuk membuka rincian modal
-            col_b1, col_b2 = st.columns(2)
+            col_b1, col_b2, col_b3 = st.columns(3)
             with col_b1:
                 if st.button("🔍 Rincian Dual Cycle", use_container_width=True, key="btn_quick_dual_detail"):
                     st.session_state["modal_activity_status"] = "Dual Cycle"
@@ -778,6 +936,12 @@ with st.container(border=True):
             with col_b2:
                 if st.button("🔍 Rincian Non Dual", use_container_width=True, key="btn_quick_non_dual_detail"):
                     st.session_state["modal_activity_status"] = "Non Dual"
+                    st.session_state["show_activity_modal"] = True
+                    st.rerun()
+
+            with col_b3:
+                if st.button("💡 Potensi Dual Cycle", use_container_width=True, key="btn_quick_potensi_dual_detail"):
+                    st.session_state["modal_activity_status"] = "Potensi Dual Cycle"
                     st.session_state["show_activity_modal"] = True
                     st.rerun()
 
@@ -829,7 +993,7 @@ with st.container(border=True):
                 st.plotly_chart(fig_combo20, use_container_width=True, key="donut_combo_single_chart")
 
                 # Tombol aksi langsung untuk membuka rincian modal Combo & Single
-                col_cb1, col_cb2 = st.columns(2)
+                col_cb1, col_cb2, col_cb3 = st.columns(3)
                 with col_cb1:
                     if st.button("🔍 Rincian Combo", use_container_width=True, key="btn_quick_combo_detail"):
                         st.session_state["modal_combo_status"] = "Combo"
@@ -839,6 +1003,12 @@ with st.container(border=True):
                 with col_cb2:
                     if st.button("🔍 Rincian Single", use_container_width=True, key="btn_quick_single_detail"):
                         st.session_state["modal_combo_status"] = "Single"
+                        st.session_state["show_combo_modal"] = True
+                        st.rerun()
+
+                with col_cb3:
+                    if st.button("💡 Potensi Combo", use_container_width=True, key="btn_quick_potensi_combo_detail"):
+                        st.session_state["modal_combo_status"] = "Potensi Combo"
                         st.session_state["show_combo_modal"] = True
                         st.rerun()
 
@@ -853,7 +1023,17 @@ with st.container(border=True):
         if len(monthly) > 0:
             render_monthly_breakdown_section(monthly)
 
+        # --------------------------------------------------------
+        # Breakdown Dual Cycle: Per Shift
+        # --------------------------------------------------------
+        shift_df = summary["shift"]
+        render_shift_breakdown_section(shift_df)
+
+        # --------------------------------------------------------
+        # Breakdown Bulanan: Combo vs Single (Kontainer 20ft)
+        # --------------------------------------------------------
         if len(monthly_20ft) > 0:
+            render_html('<div style="height:12px;"></div>')
             # FIX LOGIKA: % Combo/Single bulanan sekarang dihitung dari basis
             # kontainer 20ft (monthly_20ft), bukan dari seluruh event/kontainer.
             monthly_container_pct = monthly_20ft.melt(
@@ -888,106 +1068,131 @@ with st.container(border=True):
         else:
             st.info("Tidak ada kontainer 20ft pada data ini untuk breakdown bulanan Combo/Single.")
 
-        # --------------------------------------------------------
-        # Breakdown Dual Cycle: Per Shift
-        # --------------------------------------------------------
-        render_html('<div style="height:8px;"></div>')
-        shift_df = summary["shift"]
-
-        # --- Chart 1: Dual vs Non Dual per Shift (jumlah + persentase) ---
-        if len(shift_df) > 0:
-            shift_pct = shift_df.melt(
-                id_vars="SHIFT",
-                value_vars=["dual", "non_dual"],
-                var_name="Kategori",
-                value_name="Jumlah",
-            )
-            shift_pct["Kategori"] = shift_pct["Kategori"].map(
-                {"dual": "Dual Cycle", "non_dual": "Non Dual"}
-            )
-            shift_pct["Total_Shift"] = shift_pct.groupby("SHIFT")["Jumlah"].transform("sum")
-            shift_pct["Persen"] = np.where(
-                shift_pct["Total_Shift"] > 0, shift_pct["Jumlah"] / shift_pct["Total_Shift"] * 100, 0
-            )
-            shift_pct["Label"] = (
-                shift_pct["Jumlah"].apply(format_number)
-                + " ("
-                + shift_pct["Persen"].apply(lambda p: format_percent(p, 1))
-                + ")"
-            )
-
-            fig_shift = px.bar(
-                shift_pct,
-                x="SHIFT",
-                y="Jumlah",
-                color="Kategori",
-                barmode="stack",
-                title="Dual Cycle vs Non Dual per Shift (Jumlah & %)",
-                color_discrete_map={"Dual Cycle": "#0284C7", "Non Dual": "#94A3B8"},
-                text="Label",
-            )
-            fig_shift.update_traces(textposition="inside", insidetextanchor="middle")
-            fig_shift.update_layout(xaxis=dict(title=""), yaxis=dict(title="Jumlah Ritase"))
-            apply_glass_theme(fig_shift)
-            st.plotly_chart(fig_shift, width="stretch")
-        else:
-            st.info("Tidak ada data shift pada hasil analisis ini.")
-
     # ----------------------------------------------------------------
     # TAB 2: TWINLIFT
     # ----------------------------------------------------------------
     elif active_tab == "Twinlift":
-        # FIX LOGIKA: info "Total Event"/ritase dihapus dari tab ini karena
-        # tidak ada hubungannya dengan Twinlift (Twinlift adalah properti
-        # per-kontainer, bukan per-ritase truk). Yang relevan cukup: jumlah
-        # total kontainer, jumlah yang 20ft, dan Twinlift/Bukan Twinlift
-        # dihitung sebagai persentase dari kontainer 20ft SAJA.
-        total_kontainer_20ft = summary["total_20ft"]
-        total_twinlift_kontainer = summary["total_twinlift_kontainer"]
-        total_bukan_twinlift_kontainer = summary["total_bukan_twinlift_kontainer"]
-        pct_twinlift_20ft_val = summary["pct_twinlift_of_20ft"] * 100
+        # Radio Button Filter Lingkup Twinlift: Internasional vs Total
+        if "twinlift_scope_filter" not in st.session_state:
+            st.session_state["twinlift_scope_filter"] = "Internasional"
+
+        col_scope_rf, _ = st.columns([1, 1])
+        with col_scope_rf:
+            scope_twin = st.radio(
+                "Lingkup Evaluasi Twinlift",
+                options=["Internasional", "Domestik & Internasional"],
+                horizontal=True,
+                key="twinlift_scope_filter",
+            )
+
+        render_html('<div style="height:6px;"></div>')
+
+        # Persiapkan subset data sesuai filter scope
+        is_mode_intl = scope_twin == "Internasional"
+
+        if is_mode_intl:
+            # Filter baris kontainer yang dilayani oleh Crane Internasional (berakhiran "I")
+            crane_col_series = out_df["CRANE_ID"].astype(str).str.strip().str.upper()
+            is_intl_row = crane_col_series.str.endswith(CRANE_INTERNASIONAL_SUFFIX)
+            active_out_df = out_df[is_intl_row].copy()
+
+            df20_scope = active_out_df[active_out_df["CTR_SIZE"] == 20]
+            total_kontainer_all = len(active_out_df)
+            total_kontainer_20ft = len(df20_scope)
+            total_twinlift_kontainer = int((df20_scope["TWINLIFT_STATUS"] == "Twinlift").sum())
+            total_bukan_twinlift_kontainer = total_kontainer_20ft - total_twinlift_kontainer
+            pct_twinlift_20ft_val = (total_twinlift_kontainer / total_kontainer_20ft * 100.0) if total_kontainer_20ft > 0 else 0.0
+            pct_20ft_ratio = (total_kontainer_20ft / total_kontainer_all * 100.0) if total_kontainer_all > 0 else 0.0
+
+            # Hitung breakdown bulanan khusus Internasional
+            if total_kontainer_20ft > 0:
+                df20_scope_m = df20_scope.copy()
+                df20_scope_m["BULAN"] = pd.to_datetime(df20_scope_m["TS_G"], dayfirst=True).dt.to_period("M")
+                monthly_scope = df20_scope_m.groupby("BULAN").agg(
+                    total_20ft=("CTR_SIZE", "size"),
+                    twinlift=("TWINLIFT_STATUS", lambda s: int((s == "Twinlift").sum())),
+                )
+                monthly_scope["bukan_twinlift"] = monthly_scope["total_20ft"] - monthly_scope["twinlift"]
+                monthly_scope["pct_twinlift"] = np.where(
+                    monthly_scope["total_20ft"] > 0, monthly_scope["twinlift"] / monthly_scope["total_20ft"], 0
+                )
+                monthly_scope["pct_bukan_twinlift"] = np.where(
+                    monthly_scope["total_20ft"] > 0, monthly_scope["bukan_twinlift"] / monthly_scope["total_20ft"], 0
+                )
+                monthly_scope = monthly_scope.sort_index().reset_index().rename(columns={"BULAN": "Bulan"})
+                monthly_scope["Bulan"] = monthly_scope["Bulan"].astype(str)
+            else:
+                monthly_scope = pd.DataFrame(columns=["Bulan", "total_20ft", "twinlift", "bukan_twinlift", "pct_twinlift", "pct_bukan_twinlift"])
+
+            subtext_total = "Semua Ukuran di Kade Internasional"
+            tooltip_total = "Total seluruh kontainer (20ft & 40ft) yang dilayani oleh Crane Internasional (01I - 05I)."
+            subtext_20ft = f"{format_percent(pct_20ft_ratio)} dari Total Internasional"
+            tooltip_20ft = "Jumlah kontainer 20ft di Kade Internasional."
+            subtext_twin = "dari Kontainer 20ft Internasional"
+            tooltip_twin = "Jumlah kontainer 20ft yang diangkat secara Twinlift di Kade Internasional."
+            subtext_nontwin = "dari Kontainer 20ft Internasional"
+            tooltip_nontwin = "Jumlah kontainer 20ft yang diangkat secara Single Lift di Kade Internasional."
+            subtext_pct = "Basis 20ft Kade Internasional"
+            tooltip_pct = "Persentase kontainer 20ft Twinlift di Kade Internasional (Twinlift ÷ 20ft Internasional × 100%)."
+            donut_title = "Twinlift vs Bukan Twinlift (20ft Internasional)"
+            bar_title = "Breakdown Bulanan: Twinlift vs Bukan Twinlift (% 20ft Internasional)"
+        else:
+            active_out_df = out_df
+            total_kontainer_all = summary["container_total"]
+            total_kontainer_20ft = summary["total_20ft"]
+            total_twinlift_kontainer = summary["total_twinlift_kontainer"]
+            total_bukan_twinlift_kontainer = summary["total_bukan_twinlift_kontainer"]
+            pct_twinlift_20ft_val = summary["pct_twinlift_of_20ft"] * 100
+            monthly_scope = monthly_20ft
+
+            subtext_total = "Semua Ukuran (20ft, 40ft)"
+            tooltip_total = "Total seluruh kontainer (20ft, 40ft)."
+            subtext_20ft = f"{format_percent(summary['pct_20ft_of_total'] * 100)} dari Total Kontainer"
+            tooltip_20ft = "Jumlah kontainer 20ft."
+            subtext_twin = "dari Kontainer 20ft"
+            tooltip_twin = "Jumlah kontainer 20ft yang bisa diangkat secara bersamaan."
+            subtext_nontwin = "dari Kontainer 20ft"
+            tooltip_nontwin = "Jumlah kontainer 20ft yang tidak diangkat secara bersamaan."
+            subtext_pct = "Basis Kontainer 20ft"
+            tooltip_pct = "Persentase kontainer 20ft yang diangkat secara bersamaan (Twinlift ÷ Total 20ft × 100%)."
+            donut_title = "Twinlift vs Bukan Twinlift (dari Kontainer 20ft)"
+            bar_title = "Breakdown Bulanan: Twinlift vs Bukan Twinlift (% dari Kontainer 20ft)"
 
         t1, t2, t3, t4, t5 = st.columns(5)
         with t1:
             render_kpi_card(
                 "Total Kontainer",
-                format_number(summary["container_total"]),
-                subtext="Semua Ukuran (20ft, 40ft, 45ft)",                
+                format_number(total_kontainer_all),
+                subtext=subtext_total,
                 variant="purple",
-                tooltip="Total seluruh kontainer (20ft, 40ft, 45ft).",
             )
         with t2:
             render_kpi_card(
                 "Jumlah 20ft",
                 format_number(total_kontainer_20ft),
-                subtext=f"{format_percent(summary['pct_20ft_of_total'] * 100)} dari Total Kontainer",
+                subtext=subtext_20ft,
                 variant="amber",
-                tooltip="Jumlah kontainer 20ft.",
             )
         with t3:
             render_kpi_card(
                 "Twinlift",
                 format_number(total_twinlift_kontainer),
-                subtext="dari Kontainer 20ft",
+                subtext=subtext_twin,
                 variant="blue",
-                tooltip="Jumlah kontainer 20ft yang bisa diangkat secara bersamaan.",
             )
         with t4:
             render_kpi_card(
                 "Bukan Twinlift",
                 format_number(total_bukan_twinlift_kontainer),
-                subtext="dari Kontainer 20ft",
+                subtext=subtext_nontwin,
                 variant="slate",
-                tooltip="Jumlah kontainer 20ft yang tidak diangkat secara bersamaan.",
             )
         with t5:
             render_kpi_card(
                 "% Twinlift",
                 format_percent(pct_twinlift_20ft_val),
-                subtext="Basis Kontainer 20ft",
+                subtext=subtext_pct,
                 variant="blue",
-                tooltip="Persentase kontainer 20ft yang diangkat secara bersamaan (Twinlift ÷ Total 20ft × 100%).",
-                align_tooltip_right=True,
             )
 
         tc1, tc2 = st.columns(2)
@@ -1005,7 +1210,7 @@ with st.container(border=True):
                     names="Status",
                     values="Jumlah",
                     hole=0.52,
-                    title="Twinlift vs Bukan Twinlift (dari Kontainer 20ft)",
+                    title=donut_title,
                     color="Status",
                     color_discrete_map={"Twinlift": "#0284C7", "Bukan Twinlift": "#94A3B8"},
                 )
@@ -1029,7 +1234,7 @@ with st.container(border=True):
                         x=1.02,
                     ),
                 )
-                st.plotly_chart(fig_twin_pie, use_container_width=True, key="donut_twinlift_chart")
+                st.plotly_chart(fig_twin_pie, use_container_width=True, key=f"donut_twinlift_chart_{scope_twin}")
 
                 # Tombol aksi langsung untuk membuka rincian modal Twinlift & Bukan Twinlift
                 col_tw1, col_tw2 = st.columns(2)
@@ -1048,8 +1253,8 @@ with st.container(border=True):
                 st.info("Tidak ada kontainer 20ft pada data ini.")
 
         with tc2:
-            if len(monthly_20ft) > 0:
-                monthly_twin_pct = monthly_20ft.melt(
+            if len(monthly_scope) > 0:
+                monthly_twin_pct = monthly_scope.melt(
                     id_vars="Bulan",
                     value_vars=["pct_twinlift", "pct_bukan_twinlift"],
                     var_name="Kategori",
@@ -1062,7 +1267,7 @@ with st.container(border=True):
                 monthly_twin_pct["Label"] = monthly_twin_pct["Persentase"].apply(lambda p: format_percent(p, 1))
 
                 # Format sumbu X dari 'YYYY-MM' (contoh: '2026-01') menjadi 'YY-Mon' (contoh: '26-Jan', '26-Feb')
-                order_bulan_twin = [pd.to_datetime(b).strftime("%y-%b") for b in monthly_20ft["Bulan"].unique()]
+                order_bulan_twin = [pd.to_datetime(b).strftime("%y-%b") for b in monthly_scope["Bulan"].unique()]
                 monthly_twin_pct["Bulan"] = pd.to_datetime(monthly_twin_pct["Bulan"]).dt.strftime("%y-%b")
 
                 fig_month_twin = px.bar(
@@ -1071,7 +1276,7 @@ with st.container(border=True):
                     y="Persentase",
                     color="Kategori",
                     barmode="stack",
-                    title="Breakdown Bulanan: Twinlift vs Bukan Twinlift (% dari Kontainer 20ft)",
+                    title=bar_title,
                     color_discrete_map={"Twinlift": "#0284C7", "Bukan Twinlift": "#94A3B8"},
                     category_orders={"Bulan": order_bulan_twin},
                     text="Label",
@@ -1082,7 +1287,7 @@ with st.container(border=True):
                     yaxis=dict(title="% dari Kontainer 20ft", range=[0, 100]),
                 )
                 apply_glass_theme(fig_month_twin)
-                st.plotly_chart(fig_month_twin, width="stretch")
+                st.plotly_chart(fig_month_twin, width="stretch", key=f"bar_twinlift_chart_{scope_twin}")
             else:
                 st.info("Tidak ada kontainer 20ft pada data ini untuk breakdown bulanan.")
 
@@ -1090,7 +1295,7 @@ with st.container(border=True):
         if st.session_state.get("show_twinlift_modal") and st.session_state.get("modal_twinlift_status"):
             status_twin_to_open = st.session_state["modal_twinlift_status"]
             st.session_state["show_twinlift_modal"] = False
-            show_twinlift_detail_dialog(status_twin_to_open, out_df, summary)
+            show_twinlift_detail_dialog(status_twin_to_open, active_out_df, summary)
 
         # --------------------------------------------------------
         # Performa Crane (QC) dalam Twinlift — basis 20ft
@@ -1156,11 +1361,8 @@ with st.container(border=True):
                         "total_twinlift": "Twinlift",
                     }
                 ).copy()
-                crane_disp["Total Kontainer"] = crane_disp["Total Kontainer"].apply(format_number)
-                crane_disp["Total 20ft"] = crane_disp["Total 20ft"].apply(format_number)
-                crane_disp["Twinlift"] = crane_disp["Twinlift"].apply(format_number)
-                crane_disp["% Twinlift (dari 20ft)"] = (crane_disp["pct_twinlift_dari_20ft"] * 100).apply(lambda x: format_percent(x, 1))
-                crane_disp["% Twinlift (dari Total)"] = (crane_disp["pct_twinlift_dari_total"] * 100).apply(lambda x: format_percent(x, 1))
+                crane_disp["% Twinlift (dari 20ft)"] = (crane_disp["pct_twinlift_dari_20ft"] * 100.0).round(1)
+                crane_disp["% Twinlift (dari Total)"] = (crane_disp["pct_twinlift_dari_total"] * 100.0).round(1)
                 st.dataframe(
                     crane_disp[
                         [
@@ -1175,6 +1377,14 @@ with st.container(border=True):
                     use_container_width=True,
                     hide_index=True,
                     height=240,
+                    column_config={
+                        "Crane": st.column_config.TextColumn("Crane", width="small"),
+                        "Total Kontainer": st.column_config.NumberColumn("Total Kontainer", format="localized", width="small"),
+                        "Total 20ft": st.column_config.NumberColumn("Total 20ft", format="localized", width="small"),
+                        "Twinlift": st.column_config.NumberColumn("Twinlift", format="localized", width="small"),
+                        "% Twinlift (dari 20ft)": st.column_config.NumberColumn("% Twinlift (dari 20ft)", format="%.1f%%", width="small"),
+                        "% Twinlift (dari Total)": st.column_config.NumberColumn("% Twinlift (dari Total)", format="%.1f%%", width="small"),
+                    },
                 )
 
     # ----------------------------------------------------------------
@@ -1241,7 +1451,7 @@ with st.container(border=True):
         with col_f3:
             st.markdown(
                 '<div style="font-size: 0.92rem; font-weight: 700; color: #38bdf8; margin-bottom: 8px; display: flex; align-items: center; gap: 6px;">'
-                '<span>🎯</span> Target Penetrasi Dual Cycle'
+                '<span>🎯</span> % Simulasi Dual Cycle'
                 '</div>',
                 unsafe_allow_html=True,
             )
@@ -1256,7 +1466,7 @@ with st.container(border=True):
             st.session_state["sim_penetrasi_input"] = max(0.0, min(100.0, float(st.session_state["sim_penetrasi_input"])))
 
             sim_penetrasi_pct = st.number_input(
-                "Target Penetrasi (%)",
+                "Simulasi Dual Cycle(%)",
                 min_value=0.0,
                 max_value=100.0,
                 step=0.1,
@@ -1266,8 +1476,43 @@ with st.container(border=True):
             )
             render_html(
                 f'<div class="step2-param-hint" style="font-size:0.72rem;color:#94a3b8;margin-top:-6px;line-height:1.3;">'
-                f'Aktual kapal: <strong style="color:#38bdf8;">{act_pct_dual:.1f}% ({format_number(act_dual_count)} Rit)</strong></div>'
+                f'Aktual Dual Cycle: <strong style="color:#38bdf8;">{act_pct_dual:.1f}% ({format_number(act_dual_count)} Rit)</strong></div>'
             )
+
+        # --------------------------------------------------------
+        # Slider Ambang Dual Cycle (Khusus Tab Simulasi)
+        # Parameter batas minimum & maksimum dideteksi dinamis dari data riil file
+        # --------------------------------------------------------
+        base_ambang_file = float(summary.get("ambang_dual", AMBANG_DUAL_MENIT_DEFAULT))
+        slider_min, slider_max, slider_def = hitung_rentang_ambang_file(events, base_ambang_file)
+
+        # Sinkronisasi nilai slider dengan file aktif jika dataset berganti
+        if "slider_sim_ambang_dual" in st.session_state:
+            curr_val = st.session_state["slider_sim_ambang_dual"]
+            if curr_val < slider_min or curr_val > slider_max:
+                st.session_state["slider_sim_ambang_dual"] = slider_def
+
+        sim_ambang_dual = st.slider(
+            "Simulasi Parameter Dual Cycle (menit)",
+            min_value=slider_min,
+            max_value=slider_max,
+            value=int(st.session_state.get("slider_sim_ambang_dual", slider_def)),
+            step=5 if (slider_max - slider_min) >= 30 else 1,
+            help=f"Atur batas toleransi jeda waktu (menit) untuk simulasi deteksi Dual Cycle. Rentang deteksi parameter otomatis diambil dari riil file terupload (Min: {slider_min} mnt, Max: {slider_max} mnt, Aktual: {base_ambang_file:.0f} mnt). Slider ini hanya mempengaruhi Tab Simulasi.",
+            key="slider_sim_ambang_dual",
+        )
+
+        # Evaluasi ulang ritase Dual Cycle jika slider berbeda dari nilai default file
+        if int(sim_ambang_dual) != int(base_ambang_file):
+            sim_dual_detected = hitung_dual_count_simulasi(events, float(sim_ambang_dual))
+            sim_single_detected = max(0, act_total_ritase - sim_dual_detected)
+            eff_pct_dual = (sim_dual_detected / act_total_ritase * 100.0) if act_total_ritase > 0 else act_pct_dual
+        else:
+            sim_dual_detected = act_dual_count
+            sim_single_detected = act_single_count
+            eff_pct_dual = act_pct_dual
+
+        eff_pct_non_dual = 100.0 - eff_pct_dual
 
         # Delta dihitung terhadap KONDISI AKTUAL FILE TERUPLOAD
         delta_pct_from_act = sim_penetrasi_pct - act_pct_dual
@@ -1279,18 +1524,27 @@ with st.container(border=True):
         bbm_per_rit = float(bbm_per_rit_input)
         harga_solar = float(harga_solar_input)
 
-        # Jika target simulasi berada pada kondisi aktual file (selisih < 0.08%),
-        # gunakan nilai riil murni dari hasil analisis Dual Cycle:
-        # Dual Cycle = 2.062 Rit, Non-Dual = 2.056 Rit
-        if abs(delta_pct_from_act) < 0.08:
-            sim_ritase_dc = act_dual_count
-            sim_ritase_non_dc = act_single_count
-            delta_rit_vs_act = 0
-            delta_pct_from_act = 0.0
+        # Jika slider ambang berubah, gunakan hasil deteksi ambang simulasi; jika  disesuaikan, gabungkan penyesuaiannya
+        if int(sim_ambang_dual) != int(base_ambang_file):
+            delta_rit_from_ambang = sim_dual_detected - act_dual_count
+            if abs(delta_pct_from_act) < 0.08:
+                sim_ritase_dc = sim_dual_detected
+                sim_ritase_non_dc = sim_single_detected
+                delta_rit_vs_act = delta_rit_from_ambang
+            else:
+                delta_rit_vs_act = int(round((delta_pct_from_act / 100.0) * baseline_ritase))
+                sim_ritase_dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit_vs_act))
+                sim_ritase_non_dc = int(baseline_ritase - sim_ritase_dc)
         else:
-            delta_rit_vs_act = int(round((delta_pct_from_act / 100.0) * baseline_ritase))
-            sim_ritase_dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit_vs_act))
-            sim_ritase_non_dc = int(baseline_ritase - sim_ritase_dc)
+            if abs(delta_pct_from_act) < 0.08:
+                sim_ritase_dc = act_dual_count
+                sim_ritase_non_dc = act_single_count
+                delta_rit_vs_act = 0
+                delta_pct_from_act = 0.0
+            else:
+                delta_rit_vs_act = int(round((delta_pct_from_act / 100.0) * baseline_ritase))
+                sim_ritase_dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit_vs_act))
+                sim_ritase_non_dc = int(baseline_ritase - sim_ritase_dc)
 
         # Total Solar dihemat vs Single Cycle murni (karena tiap rit DC meniadakan 1 trip kosong)
         total_bbm_baseline = baseline_ritase * bbm_per_rit
@@ -1308,259 +1562,87 @@ with st.container(border=True):
         biaya_saat_ini_rp = solar_dihemat_aktual * harga_solar
 
         # --------------------------------------------------------
-        # Baris Kartu KPI Hasil Simulasi
+        # Baris Kartu KPI Hasil Simulasi (Baris 1: 3 Kolom)
         # --------------------------------------------------------
         render_html('<div style="height:12px;"></div>')
         r1_c1, r1_c2, r1_c3 = st.columns(3)
         with r1_c1:
             render_kpi_card(
-                label="Total Ritase Baseline",
+                label="Total Ritase",
                 value=f"{format_number(act_total_ritase)} Rit",
-                subtext="Otomatis dari file kapal",
+                subtext="Otomatis dari file",
                 variant="purple",
-                tooltip=f"Total seluruh ritase operasional dari file kapal yang dianalisis ({format_number(act_total_ritase)} rit) sebagai acuan perhitungan efisiensi.",
             )
         with r1_c2:
-            dc_sub = f"Sesuai Kondisi Aktual ({act_pct_dual:.1f}%)" if delta_rit_vs_act == 0 else f"Target: {sim_penetrasi_pct:.1f}% ({delta_rit_vs_act:+d} Rit)"
+            if delta_rit_vs_act == 0 and int(sim_ambang_dual) == int(base_ambang_file):
+                dc_sub = f"Sesuai Kondisi Aktual ({act_pct_dual:.1f}%)"
+            elif int(sim_ambang_dual) != int(base_ambang_file) and abs(delta_pct_from_act) < 0.08:
+                dc_sub = f"Ambang {sim_ambang_dual:.0f} mnt: {eff_pct_dual:.1f}% ({delta_rit_vs_act:+d} Rit)"
+            else:
+                dc_sub = f"Target: {sim_penetrasi_pct:.1f}% ({delta_rit_vs_act:+d} Rit)"
+
             render_kpi_card(
-                label="Ritase Dual Cycle Target",
+                label="Simulasi Ritase Dual Cycle",
                 value=f"{format_number(sim_ritase_dc)} Rit",
                 subtext=dc_sub,
                 variant="blue",
-                tooltip=f"Jumlah ritase 2 arah (kondisi aktual dari file: {format_number(act_dual_count)} rit).",
             )
         with r1_c3:
-            ndc_sub = f"Sesuai Kondisi Aktual ({act_pct_non_dual:.1f}%)" if delta_rit_vs_act == 0 else f"Target: {100.0-sim_penetrasi_pct:.1f}% ({-delta_rit_vs_act:+d} Rit)"
+            if delta_rit_vs_act == 0 and int(sim_ambang_dual) == int(base_ambang_file):
+                ndc_sub = f"Sesuai Kondisi Aktual ({act_pct_non_dual:.1f}%)"
+            elif int(sim_ambang_dual) != int(base_ambang_file) and abs(delta_pct_from_act) < 0.08:
+                ndc_sub = f"Ambang {sim_ambang_dual:.0f} mnt: {eff_pct_non_dual:.1f}% ({-delta_rit_vs_act:+d} Rit)"
+            else:
+                ndc_sub = f"Target: {100.0-sim_penetrasi_pct:.1f}% ({-delta_rit_vs_act:+d} Rit)"
+
             render_kpi_card(
-                label="Ritase Non-Dual Target",
+                label="Simulasi Ritase Non-Dual",
                 value=f"{format_number(sim_ritase_non_dc)} Rit",
                 subtext=ndc_sub,
                 variant="slate",
-                tooltip=f"Jumlah ritase 1 arah yang tersisa (kondisi aktual dari file: {format_number(act_single_count)} rit).",
-                align_tooltip_right=True,
             )
 
-        r2_c1, r2_c2 = st.columns(2)
+        # --------------------------------------------------------
+        # Baris Kartu KPI: Baseline Biaya & Penghematan BBM (Baris 2: 3 Kolom)
+        # --------------------------------------------------------
+        render_html('<div style="height:12px;"></div>')
+        r2_c1, r2_c2, r2_c3 = st.columns(3)
+
+        # Delta solar vs aktual
+        if delta_solar_vs_act > 0:
+            solar_delta_tag = f'<span class="kpi-delta-tag delta-up">↑ {format_decimal(abs(delta_solar_vs_act), 1)} L</span>'
+        elif delta_solar_vs_act < 0:
+            solar_delta_tag = f'<span class="kpi-delta-tag delta-down">↓ {format_decimal(abs(delta_solar_vs_act), 1)} L</span>'
+        else:
+            solar_delta_tag = ""
+
+        solar_val_display = f"{format_decimal(solar_dihemat_total, 1)} L {solar_delta_tag}"
+        biaya_single_murni_rp = total_bbm_baseline * harga_solar
+
         with r2_c1:
             render_kpi_card(
-                label="Biaya Saat Ini",
-                value=f"Rp {format_number(int(biaya_saat_ini_rp))}",
-                subtext=f"Dari {format_number(act_dual_count)} Rit DC ({format_decimal(solar_dihemat_aktual, 1)} L)",
-                variant="emerald",
-                tooltip=f"Nilai efisiensi biaya bahan bakar yang dihasilkan dari {format_number(act_dual_count)} ritase Dual Cycle aktual ({format_decimal(solar_dihemat_aktual, 1)} Liter solar pada tarif Rp {format_number(int(harga_solar))}/L).",
+                label="Biaya Full Non-Dual",
+                value=f"Rp {format_number(int(round(biaya_single_murni_rp)))}",
+                subtext=f"Kebutuhan {format_decimal(total_bbm_baseline, 1)} L Solar",
+                variant="rose",
             )
+
         with r2_c2:
-            if abs(delta_rit_vs_act) == 0:
-                fin_val_str = "Rp 0"
-                fin_sub_str = "Sesuai Data Riil Kapal"
-                fin_variant = "blue"
-            elif finansial_delta_rp > 0:
-                fin_val_str = f"+Rp {format_number(int(finansial_delta_rp))}"
-                fin_sub_str = f"+{format_decimal(delta_solar_vs_act, 1)} L vs Aktual"
-                fin_variant = "emerald"
-            else:
-                fin_val_str = f"-Rp {format_number(int(abs(finansial_delta_rp)))}"
-                fin_sub_str = f"{format_decimal(delta_solar_vs_act, 1)} L vs Aktual"
-                fin_variant = "rose"
-
             render_kpi_card(
-                label=f"Dampak Finansial (vs {act_pct_dual:.1f}%)",
-                value=fin_val_str,
-                subtext=fin_sub_str,
-                variant=fin_variant,
-                tooltip=f"Proyeksi penghematan atau pembengkakan biaya bahan bakar dibandingkan data aktual kapal ({act_pct_dual:.1f}% / {format_number(act_dual_count)} rit).",
-                align_tooltip_right=True,
+                label="Potensi Penghematan Solar",
+                value=solar_val_display,
+                subtext=f"{format_number(sim_ritase_dc)} Rit DC (vs Aktual {format_decimal(solar_dihemat_aktual, 1)} L)",
+                variant="emerald",
             )
 
-        # --------------------------------------------------------
-        # --------------------------------------------------------
-        # Bar Chart Sensitivitas Penetrasi
-        # --------------------------------------------------------
-        render_html('<div style="height:14px;"></div>')
-        # Skala interval standar tetap (setiap 5%) agar seluruh batang grafik teratur dan tidak bertumpukan
-        pct_range = [30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
-
-        curve_data = []
-        for p_val in pct_range:
-            p_ratio = p_val / 100.0
-            dc_val = int(round(p_ratio * baseline_ritase))
-            ndc_val = int(baseline_ritase - dc_val)
-            curve_data.append({
-                "Penetrasi (%)": p_val,
-                "Ritase DC": dc_val,
-                "Ritase Non-DC": ndc_val,
-                "Selected": (p_val == sim_penetrasi_pct),
-            })
-        df_curve = pd.DataFrame(curve_data)
-
-        fig_curve = go.Figure()
-
-        # Bar Ritase Dual Cycle
-        fig_curve.add_trace(
-            go.Bar(
-                x=df_curve["Penetrasi (%)"],
-                y=df_curve["Ritase DC"],
-                name="Ritase Dual Cycle",
-                marker_color="#0284C7",
-                hovertemplate="Penetrasi: %{x}%<br>Ritase DC: %{y:,.0f} rit<extra></extra>",
+        with r2_c3:
+            biaya_bbm_operasional_rp = total_bbm_operasional * harga_solar
+            render_kpi_card(
+                label="Simulasi Biaya BBM",
+                value=f"Rp {format_number(int(round(biaya_bbm_operasional_rp)))}",
+                subtext=f"Total Konsumsi {format_decimal(total_bbm_operasional, 1)} L Solar",
+                variant="slate",
             )
-        )
-
-        # Bar Ritase Non-Dual Cycle
-        fig_curve.add_trace(
-            go.Bar(
-                x=df_curve["Penetrasi (%)"],
-                y=df_curve["Ritase Non-DC"],
-                name="Ritase Non-Dual",
-                marker_color="#475569",
-                hovertemplate="Penetrasi: %{x}%<br>Ritase Non-DC: %{y:,.0f} rit<extra></extra>",
-            )
-        )
-
-        # Garis Penanda Vertikal Posisi Target Slider
-        fig_curve.add_vline(
-            x=sim_penetrasi_pct,
-            line_width=2,
-            line_dash="dash",
-            line_color="#38bdf8",
-        )
-
-        fig_curve.add_annotation(
-            x=sim_penetrasi_pct,
-            y=1.04,
-            yref="paper",
-            text=f"🎯 Target: {sim_penetrasi_pct}%",
-            showarrow=False,
-            font=dict(family="Plus Jakarta Sans", size=11, color="#38bdf8"),
-            bgcolor="rgba(13, 22, 38, 0.9)",
-            bordercolor="rgba(56, 189, 248, 0.4)",
-            borderwidth=1,
-            borderpad=4,
-        )
-
-        apply_glass_theme(fig_curve)
-        fig_curve.update_layout(
-            title=dict(text=f"Sensitivitas Penetrasi terhadap Komposisi Ritase (Aktual: {act_pct_dual:.1f}%)"),
-            barmode="stack",
-            height=550,
-            margin=dict(t=65, b=50, l=55, r=25),
-            xaxis=dict(
-                title="Penetrasi Dual Cycle (%)",
-                tickmode="array",
-                tickvals=pct_range,
-                ticktext=[f"{p}%" for p in pct_range],
-                gridcolor="rgba(255,255,255,0.06)",
-            ),
-            yaxis=dict(
-                title="Jumlah Ritase",
-                gridcolor="rgba(255,255,255,0.06)",
-                nticks=10,
-            ),
-            legend=dict(
-                orientation="h",
-                yanchor="bottom",
-                y=1.02,
-                xanchor="right",
-                x=1.0,
-            ),
-        )
-        st.plotly_chart(fig_curve, use_container_width=True, key="curve_sensitivity_sim_chart")
-
-        # --------------------------------------------------------
-        # Tabel Matriks Skema Sensitivitas Dinamis Berpusat pada Aktual File
-        # --------------------------------------------------------
-        render_html('<div style="height:16px;"></div>')
-        st.markdown(
-            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">'
-            f'<span style="font-size: 15px; font-weight: 700; color: #ffffff; font-family: \'Plus Jakarta Sans\', sans-serif;">Skema Sensitivitas Penetrasi (Titik Acuan: Aktual File {act_pct_dual:.1f}%)</span>'
-            '</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Hasilkan skenario sensitivitas dinamis seputar rasio aktual
-        act_point = round(act_pct_dual, 1)
-        base_int = int(round(act_pct_dual))
-        rel_deltas = [-15, -10, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 8, 10, 15, 20, 25, 30]
-        # Hilangkan nilai integer 50% jika terlalu berhimpitan dengan 50.1% agar tidak ada baris duplikat
-        regular_pcts = [max(10, min(95, base_int + d)) for d in rel_deltas if abs((base_int + d) - act_point) >= 0.5]
-
-        all_pcts = set(regular_pcts)
-        all_pcts.add(act_point)
-        if abs(sim_penetrasi_pct - act_point) >= 0.5:
-            all_pcts.add(round(sim_penetrasi_pct, 1))
-
-        skenario_pcts = sorted(list(all_pcts))
-
-        table_rows = []
-        for p in skenario_pcts:
-            is_actual_point = (abs(p - act_pct_dual) < 0.15)
-            is_target_point = (abs(p - sim_penetrasi_pct) < 0.05 and not is_actual_point)
-
-            if is_actual_point:
-                status_label = "📍 Kondisi Saat Ini"
-                dc = act_dual_count          # 2.062 Rit (Murni hasil perhitungan file terupload)
-                ndc = act_single_count       # 2.056 Rit (Murni hasil perhitungan file terupload)
-                delta_p = 0.0
-                delta_rit = 0
-                sol_hemat = int(round(dc * bbm_per_rit))
-                tot_bbm = int(round(ndc * bbm_per_rit))
-                bbm_rit = round(tot_bbm / baseline_ritase, 2) if baseline_ritase > 0 else 0.0
-                fin_rp = 0.0
-            else:
-                p_ratio = p / 100.0
-                delta_p = p - act_pct_dual
-                delta_rit = int(round((delta_p / 100.0) * baseline_ritase))
-                dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit))
-                ndc = int(baseline_ritase - dc)
-                sol_hemat = int(round(dc * bbm_per_rit))
-                tot_bbm = int(round(total_bbm_baseline - sol_hemat))
-                bbm_rit = round(tot_bbm / baseline_ritase, 2) if baseline_ritase > 0 else 0.0
-                fin_rp = delta_rit * bbm_per_rit * harga_solar
-                status_label = "🎯 Target Skenario" if is_target_point else ""
-
-            if abs(delta_p) < 0.05:
-                delta_str = "0.0%"
-            else:
-                delta_str = f"{delta_p:+.1f}%"
-
-            if abs(fin_rp) < 1:
-                fin_str = "Rp 0"
-            elif fin_rp > 0:
-                fin_str = f"+Rp {format_number(int(fin_rp))}"
-            else:
-                fin_str = f"-Rp {format_number(int(abs(fin_rp)))}"
-
-            table_rows.append({
-                "Status": status_label,
-                "Skenario Penetrasi": f"{p}%",
-                "Delta vs Aktual (±%)": delta_str,
-                "Ritase Dual Cycle": format_number(dc),
-                "Ritase Non-Dual": format_number(ndc),
-                "Solar Dihemat (Liter)": f"{format_number(sol_hemat)} L",
-                "Total Penggunaan BBM": f"{format_number(tot_bbm)} L",
-                "Total BBM per Rit": f"{bbm_rit:.2f} L/Rit",
-                "Efisiensi Finansial (vs Aktual)": fin_str,
-            })
-
-        df_sensitivity_table = pd.DataFrame(table_rows)
-
-        st.dataframe(
-            df_sensitivity_table,
-            use_container_width=True,
-            hide_index=True,
-            height=540,
-            column_config={
-                "Status": st.column_config.TextColumn("Status", width="medium"),
-                "Skenario Penetrasi": st.column_config.TextColumn("Skenario", width="small"),
-                "Delta vs Aktual (±%)": st.column_config.TextColumn("Delta vs Aktual", width="small"),
-                "Ritase Dual Cycle": st.column_config.TextColumn("Ritase DC", width="small"),
-                "Ritase Non-Dual": st.column_config.TextColumn("Ritase Non-DC", width="small"),
-                "Solar Dihemat (Liter)": st.column_config.TextColumn("Dampak Solar (Liter)", width="medium"),
-                "Total Penggunaan BBM": st.column_config.TextColumn("Total BBM (Liter)", width="medium"),
-                "Total BBM per Rit": st.column_config.TextColumn("BBM / Rit", width="small"),
-                "Efisiensi Finansial (vs Aktual)": st.column_config.TextColumn("Dampak Finansial (vs Aktual)", width="medium"),
-            },
-        )
 
 
     # ----------------------------------------------------------------

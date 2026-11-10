@@ -258,7 +258,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step1-card-marker):not(:has
 div[data-testid="stVerticalBlockBorderWrapper"]:has(#step2-card-marker):not(:has(.artistic-hero)),
 div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker):not(:has(.artistic-hero)) {
     width: 100% !important;
-    max-width: 1280px !important;
+    max-width: min(96vw, 1760px) !important;
     margin-left: auto !important;
     margin-right: auto !important;
     box-sizing: border-box !important;
@@ -1429,7 +1429,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]:has(#step3-card-marker):not(:has
     margin-bottom: 24px !important;
     box-sizing: border-box !important;
     width: 100% !important;
-    max-width: 1280px !important;
+    max-width: min(96vw, 1760px) !important;
     margin-left: auto !important;
     margin-right: auto !important;
     animation: fadeInUp 0.4s ease-out;
@@ -2646,7 +2646,7 @@ div[data-testid="stElementContainer"]:has([data-testid="stAlert"]),
 div[data-testid="stAlert"],
 [data-testid="stAlert"] {
     width: 100% !important;
-    max-width: 1280px !important;
+    max-width: min(96vw, 1760px) !important;
     margin-left: auto !important;
     margin-right: auto !important;
     box-sizing: border-box !important;
@@ -3126,4 +3126,30 @@ div[data-baseweb="popover"] [data-baseweb="calendar"] [role="gridcell"]:not([ari
     background-color: rgba(37, 99, 235, 0.45) !important;
     color: #ffffff !important;
     border-radius: 6px !important;
-}
+}
+
+/* KPI Value Delta Indicator Tag */
+.kpi-delta-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 1.05rem;
+    font-weight: 800;
+    vertical-align: middle;
+    margin-left: 10px;
+    padding: 3px 10px;
+    border-radius: 8px;
+    letter-spacing: -0.2px;
+}
+
+.kpi-delta-tag.delta-up {
+    color: #34d399 !important;
+    background: rgba(16, 185, 129, 0.15);
+    border: 1px solid rgba(52, 211, 153, 0.35);
+}
+
+.kpi-delta-tag.delta-down {
+    color: #f87171 !important;
+    background: rgba(239, 68, 68, 0.15);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+}

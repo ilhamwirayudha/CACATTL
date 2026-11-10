@@ -15,6 +15,10 @@ import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
+# Naikkan batas maksimum elemen sel Pandas Styler agar dataset besar (> 262.144 sel)
+# tetap dapat dirender tanpa memicu StreamlitAPIException
+pd.set_option("styler.render.max_elements", 5000000)
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 ASSETS_DIR = BASE_DIR / "assets"
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -185,19 +189,49 @@ def inject_modal_backdrop_protection():
     Menyuntikkan script proteksi modal dialog agar dialog hanya dapat ditutup
     melalui tombol 'X' di pojok kanan atas, bukan saat mengklik backdrop
     di luar modal atau menekan tombol Escape.
-    Mendukung penuh interaksi mouse pada selectbox, popover, dan portal.
+    Sekaligus menyesuaikan tinggi tabel st.dataframe di dalam modal secara
+    responsif mengikuti tinggi viewport (termasuk saat browser di-zoom 90%/80%).
     """
     components.html(
         """
         <script>
         (function() {
-            var pDoc = window.parent ? window.parent.document : document;
+            var pWin = window.parent || window;
+            var pDoc = pWin.document || document;
             if (!pDoc) return;
 
             function getActiveModal() {
                 return pDoc.querySelector('div[role="dialog"]') ||
                        pDoc.querySelector('div[data-testid="stDialog"] div[role="dialog"]');
             }
+
+            function fitModalDataframeHeight() {
+                var modal = getActiveModal();
+                if (!modal) return;
+                var dfContainer = modal.querySelector('[data-testid="stDataFrame"]');
+                if (!dfContainer) return;
+
+                var vh = pWin.innerHeight || pDoc.documentElement.clientHeight || 800;
+                var rect = dfContainer.getBoundingClientRect();
+                var topOffset = rect.top > 40 ? rect.top : 240;
+                // Sisakan ~64px di bagian bawah untuk keterangan footer & padding modal
+                var targetHeight = Math.max(420, Math.floor(vh - topOffset - 64));
+
+                dfContainer.style.setProperty('height', targetHeight + 'px', 'important');
+                var innerResizable = dfContainer.querySelector('.stDataFrameGlideDataEditor') ||
+                                     dfContainer.firstElementChild;
+                if (innerResizable) {
+                    innerResizable.style.setProperty('height', targetHeight + 'px', 'important');
+                    innerResizable.style.setProperty('max-height', targetHeight + 'px', 'important');
+                }
+            }
+
+            // Jalankan saat modal terbuka dan setiap kali ukuran/zoom browser berubah
+            fitModalDataframeHeight();
+            setTimeout(fitModalDataframeHeight, 80);
+            setTimeout(fitModalDataframeHeight, 220);
+            setTimeout(fitModalDataframeHeight, 500);
+            pWin.addEventListener('resize', fitModalDataframeHeight);
 
             function isDropdownOrPortal(target) {
                 if (!target || !target.closest) return false;
@@ -369,6 +403,104 @@ def format_decimal(val: int | float | str | None, decimals: int = 1) -> str:
         return s
 
 
+def format_duration(val: int | float | str | None) -> str:
+    """
+    Memformat durasi dari menit ke format baku durasi operasional (mendukung hari d, jam h, menit m, detik s):
+    - Contoh: 0.2 mnt -> '12s'
+    - Contoh: 4.7 mnt -> '4m 42s'
+    - Contoh: 69.88 mnt -> '1h 9m 53s'
+    - Contoh: 1500 mnt -> '1d 1h'
+    - Contoh: 0 mnt -> '0s'
+    """
+    if val is None:
+        return "-"
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        if pd.isna(val):
+            return "-"
+        minutes = float(val)
+    else:
+        s = str(val).strip().replace(",", ".")
+        if s.lower() in ("nan", "none", "", "-"):
+            return "-"
+        try:
+            minutes = float(s)
+            if np.isnan(minutes):
+                return "-"
+        except ValueError:
+            return str(val)
+
+    total_seconds = int(round(abs(minutes) * 60))
+    prefix = "-" if minutes < 0 else ""
+
+    if total_seconds == 0:
+        return "0s"
+
+    d = total_seconds // 86400
+    rem = total_seconds % 86400
+    h = rem // 3600
+    rem = rem % 3600
+    m = rem // 60
+    s = rem % 60
+
+    parts = []
+    if d > 0:
+        parts.append(f"{d}d")
+    if h > 0:
+        parts.append(f"{h}h")
+    if m > 0:
+        parts.append(f"{m}m")
+    if s > 0:
+        parts.append(f"{s}s")
+
+    return prefix + " ".join(parts)
+
+
+def format_duration_sortable(val: int | float | str | None, max_minutes: float = 0.0) -> str:
+    """
+    Memformat durasi untuk kolom tabel st.dataframe agar pengurutan (sort ↑ / ↓)
+    di browser (Intl.Collator) 100% akurat dari waktu terkecil hingga terbesar:
+    - Jika tabel hanya memuat durasi < 60 menit (seperti Dual Cycle & Combo): 'MMm SSs' ('00m 09s', '14m 48s')
+    - Jika tabel memuat durasi >= 60 menit (< 1 hari): 'HHh MMm SSs' ('00h 46m 53s', '01h 09m 53s')
+    - Jika tabel memuat durasi >= 1 hari (>= 1440 menit): 'DDd HHh MMm SSs' ('00d 00h 46m 53s', '01d 04h 20m 15s')
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
+    if val is None:
+        return "-"
+    if isinstance(val, (int, float, np.integer, np.floating)):
+        if pd.isna(val):
+            return "-"
+        minutes = float(val)
+    else:
+        s = str(val).strip().replace(",", ".")
+        if s.lower() in ("nan", "none", "", "-"):
+            return "-"
+        try:
+            minutes = float(s)
+            if np.isnan(minutes):
+                return "-"
+        except ValueError:
+            return str(val)
+
+    total_seconds = max(0, int(round(abs(minutes) * 60)))
+    prefix = "-" if minutes < 0 else ""
+
+    d = total_seconds // 86400
+    rem = total_seconds % 86400
+    h = rem // 3600
+    rem = rem % 3600
+    m = rem // 60
+    s = rem % 60
+
+    max_days = max(d, int(max(0.0, float(max_minutes)) // 1440.0))
+    d_width = max(2, len(str(max_days)))
+
+    if max_minutes >= 1440.0 or d > 0:
+        return f"{prefix}{d:0{d_width}d}d {h:02d}h {m:02d}m {s:02d}s"
+    if max_minutes >= 60.0 or h > 0:
+        return f"{prefix}{h:02d}h {m:02d}m {s:02d}s"
+    return f"{prefix}{m:02d}m {s:02d}s"
+
+
 def get_tooltip_html(label: str, tooltip: str | None = None, align_right: bool = True) -> str:
     """Menghasilkan markup HTML untuk icon tanda tanya (?) persis seperti icon help bawaan Streamlit."""
     if not tooltip:
@@ -508,6 +640,7 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
     Menyusun tabel rincian pasangan Dual Cycle (vektorisasi cepat via merge).
     Menghubungkan event DISC dan LOAD pada truk yang sama dengan format:
     Truk | DISC (Kapal, Crane) -> Gap -> LOAD (Kapal, Crane) | Jenis Dual
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if events is None or len(events) == 0:
         return pd.DataFrame()
@@ -544,23 +677,36 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
     merged["TRUK_ID"] = merged["TRUK_ID"].str.replace(r"\.0$", "", regex=True)
 
     disc_first = merged["START_TS_DISC"] <= merged["START_TS_LOAD"]
-    gap_forward = (merged["START_TS_LOAD"] - merged["END_TS_DISC"]).dt.total_seconds().abs() / 60.0
-    gap_backward = (merged["START_TS_DISC"] - merged["END_TS_LOAD"]).dt.total_seconds().abs() / 60.0
+    # =========================================================================
+    # PERINGATAN / ATURAN TETAP (DO NOT MODIFY - LOCKED LOGIC):
+    # Rumus perhitungan GAP Dual Cycle (Selesai ➔ Mulai):
+    # - DISC ➔ LOAD: START_TS_LOAD - END_TS_DISC
+    # - LOAD ➔ DISC: START_TS_DISC - END_TS_LOAD
+    # Jika terjadi overlap (keduanya negatif), gunakan nilai mutlak overlap riil
+    # min(|gap_forward|, |gap_backward|) persis seperti DUAL_GAP_MENIT di layer2_dual.
+    # =========================================================================
+    gap_forward = (merged["START_TS_LOAD"] - merged["END_TS_DISC"]).dt.total_seconds() / 60.0
+    gap_backward = (merged["START_TS_DISC"] - merged["END_TS_LOAD"]).dt.total_seconds() / 60.0
+    overlap_gap = np.minimum(gap_forward.abs(), gap_backward.abs())
 
     merged["URUTAN"] = np.where(disc_first, "DISC ➔ LOAD", "LOAD ➔ DISC")
-    calc_gap = pd.Series(np.where(disc_first, gap_forward, gap_backward), index=merged.index)
+    raw_gap = np.where(disc_first, gap_forward, gap_backward)
     if "DUAL_GAP_MENIT_DISC" in merged.columns and merged["DUAL_GAP_MENIT_DISC"].notna().any():
-        merged["GAP_MENIT"] = merged["DUAL_GAP_MENIT_DISC"].fillna(calc_gap)
+        fallback_overlap = merged["DUAL_GAP_MENIT_DISC"].fillna(overlap_gap)
     else:
-        merged["GAP_MENIT"] = calc_gap
-    merged["GAP_MENIT"] = merged["GAP_MENIT"].abs().round(1)
+        fallback_overlap = overlap_gap
+    merged["GAP_MENIT"] = np.where(raw_gap >= 0.0, raw_gap, fallback_overlap).round(1)
 
-    merged["WAKTU_DERMAGA"] = merged["START_TS_DISC"].dt.strftime("%d/%m/%y %H:%M")
-    merged["WAKTU_LAPANGAN"] = merged["START_TS_LOAD"].dt.strftime("%d/%m/%y %H:%M")
+    merged["WAKTU_DISC"] = (
+        merged["START_TS_DISC"].dt.strftime("%d/%m/%y %H:%M:%S") + " - " + merged["END_TS_DISC"].dt.strftime("%H:%M:%S")
+    )
+    merged["WAKTU_LOAD"] = (
+        merged["START_TS_LOAD"].dt.strftime("%d/%m/%y %H:%M:%S") + " - " + merged["END_TS_LOAD"].dt.strftime("%H:%M:%S")
+    )
 
     # Format ringkasan siklus urutannya disesuaikan dengan kolom urutan:
-    # Jika DISC ➔ LOAD: Truk | DISC (Kapal, Crane) | ➔ Gap mnt ➔ | LOAD (Kapal, Crane)
-    # Jika LOAD ➔ DISC: Truk | LOAD (Kapal, Crane) | ➔ Gap mnt ➔ | DISC (Kapal, Crane)
+    # Jika DISC ➔ LOAD: Truk | DISC (Kapal, Crane) | ➔ Gap durasi ➔ | LOAD (Kapal, Crane)
+    # Jika LOAD ➔ DISC: Truk | LOAD (Kapal, Crane) | ➔ Gap durasi ➔ | DISC (Kapal, Crane)
     ringkasan_disc_first = (
         merged["TRUK_ID"]
         + " | DISC ("
@@ -568,8 +714,8 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
         + ", "
         + merged["CRANE_ID_DISC"]
         + ") | ➔ "
-        + merged["GAP_MENIT"].apply(lambda g: format_decimal(g, 1))
-        + " mnt ➔ | LOAD ("
+        + merged["GAP_MENIT"].apply(format_duration)
+        + " ➔ | LOAD ("
         + merged["VES_ID_LOAD"]
         + ", "
         + merged["CRANE_ID_LOAD"]
@@ -583,8 +729,8 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
         + ", "
         + merged["CRANE_ID_LOAD"]
         + ") | ➔ "
-        + merged["GAP_MENIT"].apply(lambda g: format_decimal(g, 1))
-        + " mnt ➔ | DISC ("
+        + merged["GAP_MENIT"].apply(format_duration)
+        + " ➔ | DISC ("
         + merged["VES_ID_DISC"]
         + ", "
         + merged["CRANE_ID_DISC"]
@@ -610,12 +756,13 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
             "Format Rincian": merged["RINGKASAN_PASANGAN"],
             "Urutan": merged["URUTAN"],
             "Crane DISC": merged["CRANE_ID_DISC"],
-            "Tipe DISC": merged["CONTAINER_STATUS_DISC"],
+            "Mulai DISC": merged["START_TS_DISC"],
+            "Selesai DISC": merged["END_TS_DISC"],
             "Crane LOAD": merged["CRANE_ID_LOAD"],
-            "Tipe LOAD": merged["CONTAINER_STATUS_LOAD"],
-            "Waktu Dermaga": merged["WAKTU_DERMAGA"],
-            "Waktu Lapangan": merged["WAKTU_LAPANGAN"],
+            "Mulai LOAD": merged["START_TS_LOAD"],
+            "Selesai LOAD": merged["END_TS_LOAD"],
             "Gap (Menit)": merged["GAP_MENIT"],
+            "Anomali": np.where(merged["GAP_MENIT"] < 10.0, "Anomali", "Normal"),
             "IS_FAST": is_fast_s.loc[merged.index].values if hasattr(is_fast_s, 'loc') else is_fast_s,
         }
     )
@@ -638,6 +785,7 @@ def prepare_non_dual_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.Dat
     """
     Menyusun tabel rincian aktivitas Non Dual (single cycle ritase truk).
     Format: Truk | Aktivitas (Kapal, Crane) | Durasi | Tipe Kontainer
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if events is None or len(events) == 0:
         return pd.DataFrame()
@@ -664,11 +812,11 @@ def prepare_non_dual_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.Dat
     ev_non["CRANE_ID"] = ev_non["CRANE_ID"].fillna("-").astype(str)
 
     ev_non["TRUK_ID"] = ev_non["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
-    ev_non["DURASI_MENIT"] = ((ev_non["END_TS"] - ev_non["START_TS"]).dt.total_seconds() / 60.0).round(1)
+    ev_non["DURASI_MENIT"] = (ev_non["END_TS"] - ev_non["START_TS"]).dt.total_seconds() / 60.0
     ev_non["DURASI_MENIT"] = np.maximum(0.0, ev_non["DURASI_MENIT"])
 
-    ev_non["WAKTU_MULAI"] = ev_non["START_TS"].dt.strftime("%d/%m/%y %H:%M:%S")
-    ev_non["WAKTU_SELESAI"] = ev_non["END_TS"].dt.strftime("%d/%m/%y %H:%M:%S")
+    ev_non["WAKTU_MULAI"] = ev_non["START_TS"]
+    ev_non["WAKTU_SELESAI"] = ev_non["END_TS"]
 
     ev_non["RINGKASAN_EVENT"] = (
         ev_non["TRUK_ID"]
@@ -679,9 +827,7 @@ def prepare_non_dual_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.Dat
         + ", "
         + ev_non["CRANE_ID"]
         + ") | Durasi: "
-        + ev_non["DURASI_MENIT"].apply(lambda d: format_decimal(d, 1))
-        + " mnt | "
-        + ev_non["CONTAINER_STATUS"]
+        + ev_non["DURASI_MENIT"].apply(format_duration)
     )
 
     ev_non = ev_non.sort_values(by=["START_TS", "TRUK_ID"]).reset_index(drop=True)
@@ -697,7 +843,6 @@ def prepare_non_dual_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.Dat
             "Waktu Mulai": ev_non["WAKTU_MULAI"],
             "Waktu Selesai": ev_non["WAKTU_SELESAI"],
             "Durasi (Menit)": ev_non["DURASI_MENIT"],
-            "Tipe Kontainer": ev_non["CONTAINER_STATUS"],
             "Status": "Non Dual (Single Cycle)",
         }
     )
@@ -752,7 +897,7 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
     with mk3:
         render_kpi_card(
             label="Rata-rata Gap",
-            value=f"{format_decimal(avg_gap, 1)} menit",
+            value=format_duration(avg_gap),
             variant="blue",
             tooltip="Rata-rata selisih waktu tunggu antar aktivitas (selisih waktu selesai aktivitas pertama ke waktu mulai aktivitas kedua).",
         )
@@ -765,26 +910,85 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
             align_tooltip_right=True,
         )
 
+    # Format durasi pada dataframe untuk tampilan tabel
+    df_table = df_data.drop(columns=["IS_FAST", "Truk"], errors="ignore").copy()
+    if "Gap (Menit)" in df_table.columns:
+        max_m = float(df_table["Gap (Menit)"].max() or 0.0)
+        df_table["Gap"] = df_table["Gap (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_table = df_table.drop(columns=["Gap (Menit)"])
+
+    cols_order = [
+        "Format Rincian",
+        "Urutan",
+        "Crane DISC",
+        "Mulai DISC",
+        "Selesai DISC",
+        "Crane LOAD",
+        "Mulai LOAD",
+        "Selesai LOAD",
+        "Gap",
+        "Anomali",
+    ]
+    df_table = df_table[[c for c in cols_order if c in df_table.columns]]
+
+    # Optimasi Rendering Tabel:
+    # Pandas Styler internal Streamlit memproses tiap sel satu per satu via Python loop.
+    # Untuk dataset sangat besar (> 10.000 baris / > 100.000 sel), Styler menyebabkan browser
+    # dan server Streamlit freeze / loading sangat lama (puluhan detik).
+    # Oleh karena itu:
+    # 1. Jika data <= 5.000 baris: gunakan Pandas Styler penuh (background merah halus di seluruh baris).
+    # 2. Jika data > 5.000 baris: gunakan rendering Apache Arrow murni (0.05 detik) dengan badge status
+    #    berwarna '🔴 Anomali' / 'Normal' pada kolom Anomali agar instan dan responsif.
+    use_styler = len(df_table) <= 5000
+
+    if use_styler:
+        def _highlight_anomali_rows(data: pd.DataFrame) -> pd.DataFrame:
+            style_df = pd.DataFrame("", index=data.index, columns=data.columns)
+            if "Anomali" in data.columns:
+                is_anom = data["Anomali"].astype(str).str.strip().str.lower() == "anomali"
+                style_df.loc[is_anom, :] = "background-color: rgba(239, 68, 68, 0.22); color: #fca5a5;"
+            return style_df
+
+        render_df = df_table.style.apply(_highlight_anomali_rows, axis=None)
+    else:
+        render_df = df_table.copy()
+        if "Anomali" in render_df.columns:
+            render_df["Anomali"] = render_df["Anomali"].apply(
+                lambda v: "🔴 Anomali" if str(v).strip().lower() == "anomali" else "Normal"
+            )
+
     # Dataframe Interaktif dengan Column Config Lengkap
     st.dataframe(
-        df_data.drop(columns=["IS_FAST", "Truk"], errors="ignore"),
+        render_df,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Siklus", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Siklus", width="large"),
             "Urutan": st.column_config.TextColumn("Urutan", width="small"),
             "Crane DISC": st.column_config.TextColumn("Crane DISC", width="small"),
-            "Tipe DISC": st.column_config.TextColumn("Tipe DISC", width="small"),
+            "Mulai DISC": st.column_config.DatetimeColumn("Mulai DISC", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Selesai DISC": st.column_config.DatetimeColumn("Selesai DISC", format="DD/MM/YY HH:mm:ss", width="small"),
             "Crane LOAD": st.column_config.TextColumn("Crane LOAD", width="small"),
-            "Tipe LOAD": st.column_config.TextColumn("Tipe LOAD", width="small"),
-            "Waktu Dermaga": st.column_config.TextColumn("Waktu Dermaga", width="small"),
-            "Waktu Lapangan": st.column_config.TextColumn("Waktu Lapangan", width="small"),
-            "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+            "Mulai LOAD": st.column_config.DatetimeColumn("Mulai LOAD", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Selesai LOAD": st.column_config.DatetimeColumn("Selesai LOAD", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
+            "Anomali": st.column_config.TextColumn("Anomali", width="small"),
         },
     )
 
-    st.caption(f"Menampilkan total **{format_number(len(df_data))}** pasangan Dual Cycle (Batas toleransi jeda waktu: ≤ **{ambang_dual:.0f}** menit).")
+    render_html(
+        """
+        <div style="display: flex; justify-content: flex-end; align-items: center; margin-top: 8px;">
+            <div style="display: inline-flex; align-items: center; gap: 7px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.32); padding: 4px 12px; border-radius: 6px;">
+                <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);"></span>
+                <span style="font-size: 0.8rem; color: #fca5a5; font-weight: 500; font-family: 'Plus Jakarta Sans', sans-serif;">
+                    Baris Merah: Anomali (Gap &lt; 10m 00s)
+                </span>
+            </div>
+        </div>
+        """
+    )
 
 
 @st.dialog("Rincian Aktivitas Non-Dual", width="large")
@@ -799,88 +1003,78 @@ def _show_non_dual_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: d
             st.rerun()
         return
 
-    # Mini KPI Summary Row
+    # Mini KPI Summary Row dengan Kartu Glassmorphism & Icon Help (?)
     total_events = len(df_data)
     total_trucks = df_data["Truk"].nunique()
-    disc_count = int((df_data["Aktivitas"] == "DISC").sum())
-    load_count = int((df_data["Aktivitas"] == "LOAD").sum())
+    total_kapal = 0
+    if "Kapal" in df_data.columns:
+        v_set = set()
+        for v in df_data["Kapal"].dropna().astype(str):
+            for part in v.split(","):
+                p = part.strip()
+                if p and p != "-":
+                    v_set.add(p)
+        total_kapal = len(v_set)
+
     avg_dur = df_data["Durasi (Menit)"].mean()
     ambang_dual = float(summary.get("ambang_dual", 30.0)) if summary else 30.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
-        st.metric("Total Event Non Dual", f"{format_number(total_events)} evt")
+        render_kpi_card(
+            label="Total Event Non Dual",
+            value=f"{format_number(total_events)} evt",
+            variant="blue",
+            tooltip="Total jumlah aktivitas tunggal (Single Cycle) yang tidak berpasangan sebagai Dual Cycle.",
+        )
     with mk2:
-        st.metric("Truk Terlibat", f"{format_number(total_trucks)} Truk")
+        render_kpi_card(
+            label="Truk Terlibat",
+            value=f"{format_number(total_trucks)} Truk",
+            variant="blue",
+            tooltip="Jumlah armada truk (CAR_CHE_ID) unik yang tercatat melakukan aktivitas Non-Dual.",
+        )
     with mk3:
-        st.metric("Bongkar (DISC)", f"{format_number(disc_count)} evt", f"{format_number(load_count)} LOAD")
+        render_kpi_card(
+            label="Jumlah Kapal",
+            value=f"{format_number(total_kapal)} Kapal",
+            variant="blue",
+            tooltip="Total jumlah kapal (VES_ID) unik yang terlayani dalam aktivitas Non-Dual.",
+        )
     with mk4:
-        st.metric("Rata-rata Durasi", f"{format_decimal(avg_dur, 1)} mnt", f"Batas Dual: > {ambang_dual:.0f} mnt")
-
-    # Filter Pencarian & Aktivitas
-    fc1, fc2, fc3 = st.columns([1.8, 1.1, 1.1])
-    with fc1:
-        search_txt = st.text_input(
-            "🔍 Cari Truk / Kapal / Crane:",
-            placeholder="Ketik nomor truk (cth: 117) atau nama kapal...",
-            key="filter_non_search",
-        ).strip().lower()
-    with fc2:
-        act_filter = st.selectbox(
-            "Filter Aktivitas:",
-            ["Semua Aktivitas", "Hanya DISC (Bongkar)", "Hanya LOAD (Muat)"],
-            key="filter_non_act_sel",
-        )
-    with fc3:
-        mode_kolom_non = st.selectbox(
-            "Tampilan Kolom:",
-            ["Semua Kolom", "Rincian Operasional", "Format Ringkas"],
-            key="filter_non_mode_kolom",
+        render_kpi_card(
+            label="Rata-rata Durasi",
+            value=format_duration(avg_dur),
+            variant="blue",
+            tooltip=f"Rata-rata durasi pengerjaan per event Non-Dual (Waktu Selesai dikurangi Waktu Mulai). Batas toleransi Dual Cycle: > {ambang_dual:.0f} menit.",
+            align_tooltip_right=True,
         )
 
-    # Terapkan Filtering
-    filtered_df = df_data.copy()
-    if search_txt:
-        mask = (
-            filtered_df["Truk"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Kapal"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Crane"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Format Rincian"].str.lower().str.contains(search_txt, na=False)
-        )
-        filtered_df = filtered_df[mask]
+    display_df = df_data.drop(columns=["Status", "Jenis", "Truk"], errors="ignore").copy()
+    if "Durasi (Menit)" in display_df.columns:
+        max_m = float(display_df["Durasi (Menit)"].max() or 0.0)
+        display_df["Durasi"] = display_df["Durasi (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        display_df = display_df.drop(columns=["Durasi (Menit)"])
 
-    if act_filter == "Hanya DISC (Bongkar)":
-        filtered_df = filtered_df[filtered_df["Aktivitas"] == "DISC"]
-    elif act_filter == "Hanya LOAD (Muat)":
-        filtered_df = filtered_df[filtered_df["Aktivitas"] == "LOAD"]
-
-    if mode_kolom_non == "Rincian Operasional":
-        filtered_df = filtered_df.drop(columns=["Format Rincian"])
-    elif mode_kolom_non == "Format Ringkas":
-        filtered_df = filtered_df[["Format Rincian", "Aktivitas", "Durasi (Menit)"]]
-
-    display_df = filtered_df.drop(columns=["Status", "Jenis", "Truk"], errors="ignore")
+    display_df = display_df.reset_index(drop=True)
 
     # Dataframe Interaktif
     st.dataframe(
         display_df,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Aktivitas", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Aktivitas", width="large"),
             "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
             "Kapal": st.column_config.TextColumn("Kapal", width="small"),
             "Crane": st.column_config.TextColumn("Crane", width="small"),
-            "Waktu Mulai": st.column_config.TextColumn("Waktu Mulai", width="small"),
-            "Waktu Selesai": st.column_config.TextColumn("Waktu Selesai", width="small"),
-            "Durasi (Menit)": st.column_config.NumberColumn("Durasi (Mnt)", format="%.1f mnt", width="small"),
-            "Tipe Kontainer": st.column_config.TextColumn("Tipe Kontainer", width="small"),
+            "Waktu Mulai": st.column_config.DatetimeColumn("Waktu Mulai", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Waktu Selesai": st.column_config.DatetimeColumn("Waktu Selesai", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Durasi": st.column_config.TextColumn("Durasi", width="small"),
         },
     )
-
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(len(df_data))}** event Non Dual (Jeda antar ritase bergantian > **{ambang_dual:.0f}** menit atau aktivitas tunggal).")
 
 
 
@@ -906,10 +1100,12 @@ def prepare_potential_dual_table(
     events: pd.DataFrame, out_df: pd.DataFrame, ambang_dual: float = 30.0, max_gap: float = 180.0
 ) -> pd.DataFrame:
     """
-    Menyusun tabel ritase potensi Dual Cycle yang tidak terkualifikasi karena gap waktu melebihi ambang batas.
+    Menyusun tabel ritase potensi Dual Cycle yang diambil dari data aktivitas Non-Dual.
     Kriteria: Truk yang sama melakukan aktivitas bergantian (DISC ➔ LOAD atau LOAD ➔ DISC)
-    secara berurutan dalam rentang waktu toleransi (ambang_dual < gap <= max_gap).
+    secara berurutan dalam rentang waktu toleransi potensi (ambang_dual < gap <= max_gap).
     Aktivitas dengan gap melebihi batas toleransi max_gap (mis. jeda beda hari / shift terpisah) diabaikan.
+    Setiap event Non-Dual hanya dipasangkan satu kali (greedy matching berdasarkan gap terkecil).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if events is None or len(events) == 0:
         return pd.DataFrame()
@@ -931,45 +1127,76 @@ def prepare_potential_dual_table(
             lambda s: ", ".join(s.dropna().astype(str).unique())
         ).to_dict()
 
-    potential_list = []
+    candidate_pairs = []
     for _, pos in truck_positions.items():
         pos_sorted = sorted(pos, key=lambda p: start[p])
         m = len(pos_sorted)
         for a in range(m - 1):
             i = pos_sorted[a]
             k = pos_sorted[a + 1]
-            if activity[i] != activity[k] and (status[i] != "Dual Cycle" or status[k] != "Dual Cycle"):
+            # Murni mengambil pasangan dari aktivitas Non-Dual dengan aktivitas bergantian
+            if activity[i] != activity[k] and status[i] == "Non Dual" and status[k] == "Non Dual":
+                # Waktu mulai event kedua dikurangi waktu selesai event pertama
                 gap = (start[k] - end[i]) / np.timedelta64(1, "m")
                 gap_r = round(gap, 1)
                 if gap_r > ambang_dual and gap_r <= effective_max_gap:
-                    truk_id = str(ev.loc[i, "CAR_CHE_ID"]).replace(".0", "")
+                    candidate_pairs.append((i, k, gap_r))
 
-                    act1 = activity[i]
-                    act2 = activity[k]
-                    eid1 = ev.loc[i, "EVENT_ID"] if "EVENT_ID" in ev.columns else ev.loc[i, "GROUP_ID"]
-                    eid2 = ev.loc[k, "EVENT_ID"] if "EVENT_ID" in ev.columns else ev.loc[k, "GROUP_ID"]
-                    ves1 = ves_map.get(eid1, "-")
-                    ves2 = ves_map.get(eid2, "-")
-                    cr1 = str(ev.loc[i, "CRANE_ID"])
-                    cr2 = str(ev.loc[k, "CRANE_ID"])
-                    ringkasan = f"{truk_id} | {act1} ({ves1}, {cr1}) | ➔ {gap_r:.1f} mnt ➔ | {act2} ({ves2}, {cr2})"
-                    t_selesai_1 = pd.to_datetime(ev.loc[i, "END_TS"]).strftime("%d/%m/%y %H:%M")
-                    t_mulai_2 = pd.to_datetime(ev.loc[k, "START_TS"]).strftime("%d/%m/%y %H:%M")
-                    potential_list.append(
-                        {
-                            "Truk": truk_id,
-                            "Format Rincian": ringkasan,
-                            "Urutan": f"{act1} ➔ {act2}",
-                            "Kapal Ritase 1": ves1,
-                            "Crane Ritase 1": cr1,
-                            "Kapal Ritase 2": ves2,
-                            "Crane Ritase 2": cr2,
-                            "Waktu Selesai Ritase 1": t_selesai_1,
-                            "Waktu Mulai Ritase 2": t_mulai_2,
-                            "Gap (Menit)": gap_r,
-                            "Kelebihan Ambang": round(gap_r - ambang_dual, 1),
-                        }
-                    )
+    if not candidate_pairs:
+        return pd.DataFrame()
+
+    # Urutkan kandidat pasangan dari gap terkecil (potensi paling prioritas untuk dioptimasi)
+    candidate_pairs.sort(key=lambda x: (x[2], x[0], x[1]))
+    assigned = set()
+    potential_list = []
+
+    for i, k, gap_r in candidate_pairs:
+        if i not in assigned and k not in assigned:
+            assigned.add(i)
+            assigned.add(k)
+            truk_id = str(ev.loc[i, "CAR_CHE_ID"]).replace(".0", "")
+
+            act1 = activity[i]
+            act2 = activity[k]
+            eid1 = ev.loc[i, "EVENT_ID"] if "EVENT_ID" in ev.columns else ev.loc[i, "GROUP_ID"]
+            eid2 = ev.loc[k, "EVENT_ID"] if "EVENT_ID" in ev.columns else ev.loc[k, "GROUP_ID"]
+            ves1 = ves_map.get(eid1, "-")
+            ves2 = ves_map.get(eid2, "-")
+            cr1 = str(ev.loc[i, "CRANE_ID"]) if "CRANE_ID" in ev.columns and pd.notna(ev.loc[i, "CRANE_ID"]) else "-"
+            cr2 = str(ev.loc[k, "CRANE_ID"]) if "CRANE_ID" in ev.columns and pd.notna(ev.loc[k, "CRANE_ID"]) else "-"
+            gap_str = format_duration(gap_r)
+            ringkasan = f"{truk_id} | {act1} ({ves1}, {cr1}) ➔ {gap_str} ➔ {act2} ({ves2}, {cr2})"
+
+            if act1 == "DISC":
+                crane_disc = cr1
+                t_mulai_disc = pd.to_datetime(ev.loc[i, "START_TS"])
+                t_selesai_disc = pd.to_datetime(ev.loc[i, "END_TS"])
+                crane_load = cr2
+                t_mulai_load = pd.to_datetime(ev.loc[k, "START_TS"])
+                t_selesai_load = pd.to_datetime(ev.loc[k, "END_TS"])
+            else:
+                crane_load = cr1
+                t_mulai_load = pd.to_datetime(ev.loc[i, "START_TS"])
+                t_selesai_load = pd.to_datetime(ev.loc[i, "END_TS"])
+                crane_disc = cr2
+                t_mulai_disc = pd.to_datetime(ev.loc[k, "START_TS"])
+                t_selesai_disc = pd.to_datetime(ev.loc[k, "END_TS"])
+
+            potential_list.append(
+                {
+                    "Truk": truk_id,
+                    "Format Rincian": ringkasan,
+                    "Urutan": f"{act1} ➔ {act2}",
+                    "Crane DISC": crane_disc,
+                    "Mulai DISC": t_mulai_disc,
+                    "Selesai DISC": t_selesai_disc,
+                    "Crane LOAD": crane_load,
+                    "Mulai LOAD": t_mulai_load,
+                    "Selesai LOAD": t_selesai_load,
+                    "Gap (Menit)": gap_r,
+                    "Kelebihan Ambang": round(gap_r - ambang_dual, 1),
+                }
+            )
 
     if not potential_list:
         return pd.DataFrame()
@@ -1002,18 +1229,7 @@ def _show_issue_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict
             st.rerun()
         return
 
-    # Toolbar Pencarian Cepat
-    q_potensi = st.text_input(
-        "🔍 Cari Truk atau Ringkasan Siklus (Potensi Dual):",
-        key="search_issue_potensi_q",
-        placeholder="Ketik nomor truk atau kode kapal...",
-    )
-
     df_display = df_potensi.copy()
-    if q_potensi:
-        qp_lower = q_potensi.strip().lower()
-        m_pot = df_display["Truk"].str.lower().str.contains(qp_lower, na=False) | df_display["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
-        df_display = df_display[m_pot]
 
     # Hitung Metrik KPI Sesuai Parameter Dual Cycle yang Aktif
     total_potensi = len(df_display)
@@ -1033,13 +1249,13 @@ def _show_issue_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(truk_terdampak)} Truk",
-            variant="amber",
+            variant="blue",
             tooltip="Total armada truk unik yang memiliki aktivitas bergantian dalam rentang toleransi potensi.",
         )
     with mk3:
         render_kpi_card(
             label="Rata-rata Gap",
-            value=f"{format_decimal(avg_gap_potensi, 1)} mnt",
+            value=format_duration(avg_gap_potensi),
             variant="blue",
             tooltip=f"Rata-rata jeda waktu tunggu truk pada ritase potensi ({ambang_dual:.0f} mnt < gap ≤ {max_gap_dual:.0f} mnt).",
         )
@@ -1048,58 +1264,79 @@ def _show_issue_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict
             label="Maksimal Toleransi",
             value=f"≤ {max_gap_dual:.0f} mnt",
             variant="blue",
-            tooltip=f"Batas maksimal toleransi gap diatur dari slider di tab Simulasi: ≤ {max_gap_dual:.0f} mnt (Target Dual Cycle aktif: ≤ {ambang_dual:.0f} mnt).",
+            tooltip=f"Batas maksimal toleransi jeda waktu untuk evaluasi potensi: {ambang_dual:.0f} mnt < Gap ≤ {max_gap_dual:.0f} mnt.",
             align_tooltip_right=True,
         )
 
     render_html('<div style="height:8px;"></div>')
 
+    df_pot_table = df_display.drop(columns=["Truk"], errors="ignore").copy()
+    if "Gap (Menit)" in df_pot_table.columns:
+        max_m = float(df_pot_table["Gap (Menit)"].max() or 0.0)
+        df_pot_table["Gap"] = df_pot_table["Gap (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_pot_table = df_pot_table.drop(columns=["Gap (Menit)"])
+    if "Kelebihan Ambang" in df_pot_table.columns:
+        max_k = float(df_pot_table["Kelebihan Ambang"].max() or 0.0)
+        df_pot_table["Kelebihan Ambang"] = df_pot_table["Kelebihan Ambang"].apply(lambda v: f"+{format_duration_sortable(v, max_k)}")
+
+    cols_order = [
+        "Format Rincian",
+        "Urutan",
+        "Crane DISC",
+        "Mulai DISC",
+        "Selesai DISC",
+        "Crane LOAD",
+        "Mulai LOAD",
+        "Selesai LOAD",
+        "Gap",
+        "Kelebihan Ambang",
+    ]
+    df_pot_table = df_pot_table[[c for c in cols_order if c in df_pot_table.columns]]
+
     # Dataframe Interaktif
     st.dataframe(
-        df_display.drop(columns=["Truk"], errors="ignore"),
+        df_pot_table,
         use_container_width=True,
         hide_index=True,
-        height=420,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Siklus", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Siklus", width="large"),
             "Urutan": st.column_config.TextColumn("Urutan", width="small"),
-            "Kapal Ritase 1": st.column_config.TextColumn("Kapal 1", width="small"),
-            "Crane Ritase 1": st.column_config.TextColumn("Crane 1", width="small"),
-            "Kapal Ritase 2": st.column_config.TextColumn("Kapal 2", width="small"),
-            "Crane Ritase 2": st.column_config.TextColumn("Crane 2", width="small"),
-            "Waktu Selesai Ritase 1": st.column_config.TextColumn("Selesai 1", width="small"),
-            "Waktu Mulai Ritase 2": st.column_config.TextColumn("Mulai 2", width="small"),
-            "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
-            "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
+            "Crane DISC": st.column_config.TextColumn("Crane DISC", width="small"),
+            "Mulai DISC": st.column_config.DatetimeColumn("Mulai DISC", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Selesai DISC": st.column_config.DatetimeColumn("Selesai DISC", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Crane LOAD": st.column_config.TextColumn("Crane LOAD", width="small"),
+            "Mulai LOAD": st.column_config.DatetimeColumn("Mulai LOAD", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Selesai LOAD": st.column_config.DatetimeColumn("Selesai LOAD", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
+            "Kelebihan Ambang": st.column_config.TextColumn("Kelebihan Ambang", width="small"),
         },
     )
 
-    st.caption(
-        f"Menampilkan total **{format_number(len(df_display))}** ritase potensi Dual Cycle "
-        f"(Jeda waktu tunggu antara **> {ambang_dual:.0f} menit** dan **≤ {max_gap_dual:.0f} menit**, diatur melalui slider di tab Simulasi)."
-    )
 
+_show_potential_dual_dialog = _show_issue_dialog
 
 
 def show_activity_detail_dialog(status: str, events: pd.DataFrame, out_df: pd.DataFrame, summary: dict = None):
     """
     Menampilkan modal pop-up interaktif rincian aktivitas operasional
-    ('Dual Cycle', 'Non Dual', atau 'Issue').
+    ('Dual Cycle', 'Non Dual', atau 'Potensi Dual Cycle').
     Menyediakan tabel interaktif, format ringkasan truk, filter pencarian,
     serta tombol unduh CSV.
     """
     if status == "Dual Cycle":
         _show_dual_cycle_dialog(events, out_df, summary)
-    elif status == "Issue":
-        _show_issue_dialog(events, out_df, summary)
+    elif status in ("Issue", "Potensi", "Potensi Dual Cycle"):
+        _show_potential_dual_dialog(events, out_df, summary)
     else:
         _show_non_dual_dialog(events, out_df, summary)
 
 
-def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd.DataFrame:
+def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None, ambang_combo: float = 3.0) -> pd.DataFrame:
     """
     Menyusun tabel rincian operasional Combo (basis kontainer 20ft).
     Setiap baris mewakili 1 pasangan Combo (2 kontainer 20ft dalam 1 ritase).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if out_df is None or len(out_df) == 0:
         return pd.DataFrame()
@@ -1124,18 +1361,15 @@ def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd
     if len(r1) == 0:
         return pd.DataFrame()
 
-    gap_g = (r2["TS_G"] - r1["TS_G"]).dt.total_seconds().abs() / 60.0
-    gap_h = (r2["TS_H"] - r1["TS_H"]).dt.total_seconds().abs() / 60.0
-
-    # Jeda waktu (gap) antara 2 kontainer dalam ritase combo:
-    # Gunakan selisih minimum handling time. Jika selisih minimum bernilai 0 / membulat ke 0.0
-    # (misal karena pencatatan timestamp lapangan/dermaga ganda hanya selisih beberapa detik),
-    # gunakan selisih pada titik operasi yang memiliki jeda waktu aktual (dermaga/lapangan) agar gap merefleksikan jeda fisik nyata.
-    min_gap = np.minimum(gap_g, gap_h)
-    max_gap = np.maximum(gap_g, gap_h)
-    gap_calc = np.where(min_gap.round(1) > 0.0, min_gap, max_gap).round(1)
-    has_sec_diff = (r2["TS_G"] != r1["TS_G"]) | (r2["TS_H"] != r1["TS_H"])
-    gap = pd.Series(np.where((gap_calc <= 0.0) & has_sec_diff, 0.1, gap_calc), index=r1.index)
+    # =========================================================================
+    # PERINGATAN / ATURAN TETAP (DO NOT MODIFY):
+    # Logic perhitungan GAP COMBO bertingkat (if-else fallback):
+    # 1. Cek Gap Dermaga (|DISC_LOAD_TS2 - DISC_LOAD_TS1| <= ambang_combo) -> pakai Gap Dermaga
+    # 2. Jika Gap Dermaga > ambang_combo, cek Gap Lapangan (|STACK_UNSTACK_TS2 - STACK_UNSTACK_TS1|) -> pakai Gap Lapangan
+    # =========================================================================
+    gap_dermaga = (r2["TS_G"] - r1["TS_G"]).dt.total_seconds().abs() / 60.0
+    gap_lapangan = (r2["TS_H"] - r1["TS_H"]).dt.total_seconds().abs() / 60.0
+    gap = pd.Series(np.where(gap_dermaga <= float(ambang_combo), gap_dermaga, gap_lapangan), index=r1.index)
 
     truk_id = r1["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
     ves_id = r1["VES_ID"].fillna("-").astype(str)
@@ -1152,8 +1386,7 @@ def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd
         + ", "
         + crane_id
         + ") | 2x 20ft | Gap: "
-        + gap.apply(lambda g: format_decimal(g, 1))
-        + " mnt"
+        + gap.apply(format_duration)
     )
 
     res = pd.DataFrame(
@@ -1164,10 +1397,10 @@ def prepare_combo_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> pd
             "Aktivitas": act,
             "Kapal": ves_id,
             "Crane": crane_id,
-            "DISC_LOAD_TS1": r1["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
-            "DISC_LOAD_TS2": r2["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
-            "STACK_UNSTACK_TS1": r1["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
-            "STACK_UNSTACK_TS2": r2["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "DISC_LOAD_TS1": r1["TS_G"],
+            "DISC_LOAD_TS2": r2["TS_G"],
+            "STACK_UNSTACK_TS1": r1["TS_H"],
+            "STACK_UNSTACK_TS2": r2["TS_H"],
             "Gap Combo (Menit)": gap,
         }
     )
@@ -1178,6 +1411,7 @@ def prepare_single_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> p
     """
     Menyusun tabel rincian operasional Single (basis kontainer 20ft).
     Setiap baris mewakili 1 kontainer 20ft yang diangkut tunggal (1 kontainer per ritase).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if out_df is None or len(out_df) == 0:
         return pd.DataFrame()
@@ -1194,7 +1428,7 @@ def prepare_single_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> p
     crane_id = df_s["CRANE_ID"].fillna("-").astype(str)
     act = df_s["ACTIVITY"].fillna("-").astype(str)
 
-    durasi_mnt = ((df_s["TS_H"] - df_s["TS_G"]).dt.total_seconds().abs() / 60.0).round(1)
+    durasi_mnt = (df_s["TS_H"] - df_s["TS_G"]).dt.total_seconds().abs() / 60.0
 
     ringkasan = (
         truk_id
@@ -1204,7 +1438,7 @@ def prepare_single_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> p
         + ves_id
         + ", "
         + crane_id
-        + ") | 1x 20ft | Single Ritase"
+        + ")"
     )
 
     res = pd.DataFrame(
@@ -1215,8 +1449,8 @@ def prepare_single_table(out_df: pd.DataFrame, events: pd.DataFrame = None) -> p
             "Aktivitas": act,
             "Kapal": ves_id,
             "Crane": crane_id,
-            "DISC_LOAD_TS": df_s["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S"),
-            "STACK_UNSTACK_TS": df_s["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S"),
+            "DISC_LOAD_TS": df_s["TS_G"],
+            "STACK_UNSTACK_TS": df_s["TS_H"],
             "Durasi (Menit)": durasi_mnt,
         }
     )
@@ -1241,61 +1475,90 @@ def prepare_potential_combo_table(
     max_gap: float = 30.0,
 ) -> pd.DataFrame:
     """
-    Menyusun tabel potensi Combo tertunda:
-    Kontainer 20ft pada truk yang sama dan aktivitas yang sama (DISC-DISC atau LOAD-LOAD),
-    namun jeda waktu tunggunya melebihi ambang_combo dan <= max_gap menit,
-    sehingga terpaksa dihitung sebagai Single terpisah.
+    Menyusun tabel ritase potensi Combo yang diambil murni dari data Single 20ft:
+    Dua kontainer 20ft Single pada truk yang sama dan aktivitas yang sama (DISC-DISC atau LOAD-LOAD),
+    namun jeda waktu tunggunya melebihi ambang_combo dan <= max_gap menit.
+    Evaluasi jeda waktu dilakukan pada Dermaga (TS_G) maupun Lapangan (TS_H) sesuai Layer 1 Combo.
+    Setiap kontainer Single hanya dipasangkan satu kali (greedy matching berdasarkan gap terkecil).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if out_df is None or len(out_df) == 0:
         return pd.DataFrame()
 
     effective_max_gap = float(max_gap) if max_gap is not None else max(float(ambang_combo) + 15.0, 30.0)
 
-    df20 = out_df[out_df["CTR_SIZE"] == 20].copy()
+    # Murni memfilter kontainer 20ft berstatus Single
+    df20 = out_df[(out_df["CTR_SIZE"] == 20) & (out_df["CONTAINER_STATUS"] == "Single")].copy()
     if len(df20) < 2:
         return pd.DataFrame()
 
     df20["TS_G"] = pd.to_datetime(df20["TS_G"])
     df20["TS_H"] = pd.to_datetime(df20["TS_H"])
 
-    potentials = []
+    candidate_pairs = []
     for (truck, act), group in df20.groupby(["CAR_CHE_ID", "ACTIVITY"]):
-        g_sorted = group.sort_values("TS_G").reset_index(drop=True)
+        g_sorted = group.sort_values(by=["TS_G", "TS_H"]).reset_index(drop=True)
         m = len(g_sorted)
         for i in range(m - 1):
             r1 = g_sorted.iloc[i]
             r2 = g_sorted.iloc[i + 1]
-            if r1["EVENT_ID"] == r2["EVENT_ID"]:
+
+            gaps_valid = []
+            if pd.notna(r1["TS_G"]) and pd.notna(r2["TS_G"]):
+                gaps_valid.append(abs((r2["TS_G"] - r1["TS_G"]).total_seconds()) / 60.0)
+            if pd.notna(r1["TS_H"]) and pd.notna(r2["TS_H"]):
+                gaps_valid.append(abs((r2["TS_H"] - r1["TS_H"]).total_seconds()) / 60.0)
+
+            if not gaps_valid:
                 continue
-            gap_g = abs((r2["TS_G"] - r1["TS_G"]).total_seconds()) / 60.0
-            gap_h = abs((r2["TS_H"] - r1["TS_H"]).total_seconds()) / 60.0
-            gap = min(gap_g, gap_h)
-            gap_r = round(gap, 1)
+
+            gap_min = min(gaps_valid)
+            gap_r = round(gap_min, 1)
 
             if gap_r > ambang_combo and gap_r <= effective_max_gap:
-                truk_id = str(truck).replace(".0", "")
+                candidate_pairs.append((i, i + 1, gap_r, r1, r2, truck, act))
 
+    if not candidate_pairs:
+        return pd.DataFrame()
 
-                ves1 = str(r1["VES_ID"])
-                ves2 = str(r2["VES_ID"])
-                cr1 = str(r1["CRANE_ID"])
-                cr2 = str(r2["CRANE_ID"])
-                ringkasan = f"{truk_id} | {act} ({ves1}, {cr1}) | ➔ {gap_r:.1f} mnt ➔ | {act} ({ves2}, {cr2})"
-                potentials.append(
-                    {
-                        "Truk": truk_id,
-                        "Format Rincian": ringkasan,
-                        "Aktivitas": act,
-                        "Kapal 1": ves1,
-                        "Crane 1": cr1,
-                        "Kapal 2": ves2,
-                        "Crane 2": cr2,
-                        "Waktu 1": r1["TS_G"].strftime("%d/%m/%y %H:%M"),
-                        "Waktu 2": r2["TS_G"].strftime("%d/%m/%y %H:%M"),
-                        "Gap (Menit)": gap_r,
-                        "Kelebihan Ambang": round(gap_r - ambang_combo, 1),
-                    }
-                )
+    # Urutkan dari gap terkecil (potensi paling prioritas untuk dioptimasi)
+    candidate_pairs.sort(key=lambda x: (x[2], x[0], x[1]))
+    assigned = set()
+    potentials = []
+
+    for idx1, idx2, gap_r, r1, r2, truck, act in candidate_pairs:
+        eid1 = r1["EVENT_ID"] if "EVENT_ID" in r1 else idx1
+        eid2 = r2["EVENT_ID"] if "EVENT_ID" in r2 else idx2
+
+        if eid1 not in assigned and eid2 not in assigned:
+            assigned.add(eid1)
+            assigned.add(eid2)
+
+            truk_id = str(truck).replace(".0", "")
+            ves1 = str(r1.get("VES_ID", "-"))
+            ves2 = str(r2.get("VES_ID", "-"))
+            cr1 = str(r1.get("CRANE_ID", "-"))
+            cr2 = str(r2.get("CRANE_ID", "-"))
+            gap_str = format_duration(gap_r)
+            ringkasan = f"{truk_id} | {act} ({ves1}, {cr1}) ➔ {gap_str} ➔ {act} ({ves2}, {cr2})"
+
+            potentials.append(
+                {
+                    "Truk": truk_id,
+                    "Format Rincian": ringkasan,
+                    "Aktivitas": act,
+                    "Kapal 1": ves1,
+                    "Crane 1": cr1,
+                    "Kapal 2": ves2,
+                    "Crane 2": cr2,
+                    "DISC_LOAD_TS1": pd.to_datetime(r1.get("TS_G")),
+                    "DISC_LOAD_TS2": pd.to_datetime(r2.get("TS_G")),
+                    "STACK_UNSTACK_TS1": pd.to_datetime(r1.get("TS_H")),
+                    "STACK_UNSTACK_TS2": pd.to_datetime(r2.get("TS_H")),
+                    "Gap (Menit)": gap_r,
+                    "Kelebihan Ambang": round(gap_r - ambang_combo, 1),
+                }
+            )
 
     if not potentials:
         return pd.DataFrame()
@@ -1310,7 +1573,8 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
     """
     inject_modal_backdrop_protection()
 
-    df_data = prepare_combo_table(out_df, events)
+    ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
+    df_data = prepare_combo_table(out_df, events, ambang_combo=ambang_combo)
     if len(df_data) == 0:
         st.info("Tidak ada data aktivitas Combo yang ditemukan pada dataset ini.")
         if st.button("Tutup", key="btn_close_empty_combo", type="secondary"):
@@ -1321,13 +1585,12 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
     total_kontainer = total_ritase * 2
     total_trucks = df_data["Truk"].nunique()
     avg_gap = df_data["Gap Combo (Menit)"].mean()
-    ambang_combo = float(summary.get("ambang_combo", 3.0)) if summary else 3.0
 
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
         render_kpi_card(
             label="Total Ritase Combo",
-            value=f"{format_number(total_ritase)} Pasang",
+            value=f"{format_number(total_ritase)} Rit",
             variant="blue",
             tooltip="Jumlah pergerakan 2 kontainer dalam 1 truk yang sama.",
         )
@@ -1335,57 +1598,50 @@ def _show_combo_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict
         render_kpi_card(
             label="Total Kontainer",
             value=f"{format_number(total_kontainer)} Box",
-            variant="purple",
+            variant="blue",
             tooltip="Jumlah kontainer 20ft yang terangkut secara bersamaan.",
         )
     with mk3:
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(total_trucks)} Truk",
-            variant="amber",
+            variant="blue",
             tooltip="Jumlah truk yang membawa 2 kontainer.",
         )
     with mk4:
         render_kpi_card(
             label="Rata-rata Gap Combo",
-            value=f"{format_decimal(avg_gap, 1)} mnt",
+            value=format_duration(avg_gap),
             variant="blue",
             tooltip=f"Rata-rata selisih waktu aktivitas 2 kontainer (Batas ambang combo aktif: ≤ {ambang_combo:.0f} menit).",
             align_tooltip_right=True,
         )
 
-    q = st.text_input("🔍 Cari Truk, Kapal, atau Ringkasan Combo:", key="search_combo_detail_q", placeholder="Ketik nomor truk, kode kapal, crane...")
-    filtered_df = df_data.copy()
-    if q:
-        q_lower = q.lower()
-        mask = (
-            filtered_df["Truk"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Format Rincian"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Kapal"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Crane"].str.lower().str.contains(q_lower, na=False)
-        )
-        filtered_df = filtered_df[mask]
+    df_combo_table = df_data.drop(columns=["Truk"], errors="ignore").copy()
+    if "Gap Combo (Menit)" in df_combo_table.columns:
+        max_m = float(df_combo_table["Gap Combo (Menit)"].max() or 0.0)
+        df_combo_table["Gap"] = df_combo_table["Gap Combo (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_combo_table = df_combo_table.drop(columns=["Gap Combo (Menit)"])
 
     st.dataframe(
-        filtered_df.drop(columns=["Truk"], errors="ignore"),
+        df_combo_table,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Combo", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Combo", width="large"),
             "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
             "Kapal": st.column_config.TextColumn("Kapal", width="small"),
             "Crane": st.column_config.TextColumn("Crane", width="small"),
-            "DISC_LOAD_TS1": st.column_config.TextColumn("DISC_LOAD_TS1", width="small"),
-            "DISC_LOAD_TS2": st.column_config.TextColumn("DISC_LOAD_TS2", width="small"),
-            "STACK_UNSTACK_TS1": st.column_config.TextColumn("STACK_UNSTACK_TS1", width="small"),
-            "STACK_UNSTACK_TS2": st.column_config.TextColumn("STACK_UNSTACK_TS2", width="small"),
-            "Gap Combo (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
+            "DISC_LOAD_TS1": st.column_config.DatetimeColumn("DISC_LOAD_TS1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "DISC_LOAD_TS2": st.column_config.DatetimeColumn("DISC_LOAD_TS2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "STACK_UNSTACK_TS1": st.column_config.DatetimeColumn("STACK_UNSTACK_TS1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "STACK_UNSTACK_TS2": st.column_config.DatetimeColumn("STACK_UNSTACK_TS2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
         },
     )
 
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** ritase Combo (Batas toleransi jeda waktu: ≤ **{ambang_combo:.0f}** menit).")
 
 @st.dialog("Rincian Aktivitas Single (Kontainer 20ft)", width="large")
 def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
@@ -1419,55 +1675,47 @@ def _show_single_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary: dic
         render_kpi_card(
             label="Total Kontainer",
             value=f"{format_number(total_kontainer)} Box",
-            variant="purple",
+            variant="blue",
             tooltip="Jumlah kontainer 20ft yang diangkut tunggal (1 kontainer per ritase).",
         )
     with mk3:
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(total_trucks)} Truk",
-            variant="amber",
+            variant="blue",
             tooltip="Jumlah truk yang membawa 1 kontainer.",
         )
     with mk4:
         render_kpi_card(
             label="Rata-rata Durasi Single",
-            value=f"{format_decimal(avg_durasi, 1)} mnt",
+            value=format_duration(avg_durasi),
             variant="blue",
             tooltip="Rata-rata durasi pergerakan aktivitas ritase kontainer Single.",
             align_tooltip_right=True,
         )
 
-    q = st.text_input("🔍 Cari Truk, Kapal, atau Ringkasan Single:", key="search_single_detail_q", placeholder="Ketik nomor truk, kode kapal, crane...")
-    filtered_df = df_data.copy()
-    if q:
-        q_lower = q.lower()
-        mask = (
-            filtered_df["Truk"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Format Rincian"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Kapal"].str.lower().str.contains(q_lower, na=False)
-            | filtered_df["Crane"].str.lower().str.contains(q_lower, na=False)
-        )
-        filtered_df = filtered_df[mask]
+    df_single_table = df_data.drop(columns=["Truk"], errors="ignore").copy()
+    if "Durasi (Menit)" in df_single_table.columns:
+        max_m = float(df_single_table["Durasi (Menit)"].max() or 0.0)
+        df_single_table["Durasi"] = df_single_table["Durasi (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_single_table = df_single_table.drop(columns=["Durasi (Menit)"])
 
     st.dataframe(
-        filtered_df.drop(columns=["Truk"], errors="ignore"),
+        df_single_table,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Single", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Single", width="large"),
             "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
             "Kapal": st.column_config.TextColumn("Kapal", width="small"),
             "Crane": st.column_config.TextColumn("Crane", width="small"),
-            "DISC_LOAD_TS": st.column_config.TextColumn("DISC_LOAD_TS", width="small"),
-            "STACK_UNSTACK_TS": st.column_config.TextColumn("STACK_UNSTACK_TS", width="small"),
-            "Durasi (Menit)": st.column_config.NumberColumn("Durasi (Mnt)", format="%.1f mnt", width="small"),
+            "DISC_LOAD_TS": st.column_config.DatetimeColumn("DISC_LOAD_TS", format="DD/MM/YY HH:mm:ss", width="small"),
+            "STACK_UNSTACK_TS": st.column_config.DatetimeColumn("STACK_UNSTACK_TS", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Durasi": st.column_config.TextColumn("Durasi", width="small"),
         },
     )
-
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** ritase Single 20ft (Kontainer tunggal atau jeda pasangan > **{ambang_combo:.0f}** menit).")
 
 
 
@@ -1484,7 +1732,7 @@ def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary
             "slider_sim_max_gap_combo",
             st.session_state.get(
                 "slider_max_gap_potensi_combo",
-                summary.get("max_gap_combo", 30.0) if summary else 30.0,
+                summary.get("max_gap_combo", 10.0) if summary else 10.0,
             ),
         )
     )
@@ -1497,18 +1745,7 @@ def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary
             st.rerun()
         return
 
-    # Toolbar Pencarian Cepat
-    q_potensi = st.text_input(
-        "🔍 Cari Truk atau Ringkasan Siklus (Potensi Combo):",
-        key="search_combo_issue_potensi_q",
-        placeholder="Ketik nomor truk atau kode kapal...",
-    )
-
     df_display = df_potensi.copy()
-    if q_potensi:
-        qp_lower = q_potensi.strip().lower()
-        m_pot = df_display["Truk"].str.lower().str.contains(qp_lower, na=False) | df_display["Format Rincian"].str.lower().str.contains(qp_lower, na=False)
-        df_display = df_display[m_pot]
 
     total_potensi = len(df_display)
     truk_potensi = set(df_display["Truk"].tolist()) if total_potensi > 0 else set()
@@ -1519,149 +1756,212 @@ def _show_combo_issue_dialog(out_df: pd.DataFrame, events: pd.DataFrame, summary
     with mk1:
         render_kpi_card(
             label="Potensi Combo",
-            value=f"{format_number(total_potensi)} Data",
+            value=f"{format_number(total_potensi)} Pasang",
             variant="blue",
-            tooltip=f"Data pasangan kontainer 20ft pada aktivitas sama dengan jeda waktu antara {ambang_combo:.0f} mnt s/d batas toleransi {max_gap_combo:.0f} mnt.",
+            tooltip=f"Data pasangan kontainer 20ft Single pada aktivitas sama dengan jeda waktu antara {ambang_combo:.0f} mnt s/d {max_gap_combo:.0f} mnt.",
         )
     with mk2:
         render_kpi_card(
             label="Jumlah Truk",
             value=f"{format_number(truk_terdampak)} Truk",
-            variant="amber",
+            variant="blue",
             tooltip="Total armada truk unik yang memiliki potensi Combo tertunda.",
         )
     with mk3:
         render_kpi_card(
             label="Rata-rata Gap Potensi",
-            value=f"{format_decimal(avg_gap_potensi, 1)} mnt",
+            value=format_duration(avg_gap_potensi),
             variant="blue",
             tooltip=f"Rata-rata jeda waktu pasangan kontainer 20ft ({ambang_combo:.0f} mnt < gap ≤ {max_gap_combo:.0f} mnt).",
         )
     with mk4:
         render_kpi_card(
-            label="Maksimal Toleransi",
-            value=f"≤ {max_gap_combo:.0f} mnt",
+            label="Ambang Batas Combo",
+            value=f"≤ {ambang_combo:.0f} mnt",
             variant="blue",
-            tooltip=f"Batas maksimal toleransi gap diatur dari slider di tab Simulasi: ≤ {max_gap_combo:.0f} mnt (Target Combo aktif: ≤ {ambang_combo:.0f} mnt).",
+            tooltip=f"Target batas ambang resmi kualifikasi Combo aktif: ≤ {ambang_combo:.0f} menit. Tabel mengevaluasi kontainer Single yang jedanya melebihi ambang batas ini sebagai peluang efisiensi.",
             align_tooltip_right=True,
         )
 
     render_html('<div style="height:8px;"></div>')
 
+    df_combo_pot_table = df_display.drop(columns=["Truk", "Kelebihan Ambang"], errors="ignore").copy()
+    if "Gap (Menit)" in df_combo_pot_table.columns:
+        max_m = float(df_combo_pot_table["Gap (Menit)"].max() or 0.0)
+        df_combo_pot_table["Gap"] = df_combo_pot_table["Gap (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_combo_pot_table = df_combo_pot_table.drop(columns=["Gap (Menit)"])
+
+    cols_order = [
+        "Format Rincian",
+        "Aktivitas",
+        "DISC_LOAD_TS1",
+        "DISC_LOAD_TS2",
+        "STACK_UNSTACK_TS1",
+        "STACK_UNSTACK_TS2",
+        "Gap",
+    ]
+    df_combo_pot_table = df_combo_pot_table[[c for c in cols_order if c in df_combo_pot_table.columns]]
+
     st.dataframe(
-        df_display.drop(columns=["Truk"], errors="ignore"),
+        df_combo_pot_table,
         use_container_width=True,
         hide_index=True,
-        height=420,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Combo", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Potensi Combo", width="large"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
-            "Kapal 1": st.column_config.TextColumn("Kapal 1", width="small"),
-            "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
-            "Kapal 2": st.column_config.TextColumn("Kapal 2", width="small"),
-            "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
-            "Waktu 1": st.column_config.TextColumn("Waktu 1", width="small"),
-            "Waktu 2": st.column_config.TextColumn("Waktu 2", width="small"),
-            "Gap (Menit)": st.column_config.NumberColumn("Gap (Mnt)", format="%.1f mnt", width="small"),
-            "Kelebihan Ambang": st.column_config.NumberColumn("Kelebihan Ambang", format="+%.1f mnt", width="small"),
+            "DISC_LOAD_TS1": st.column_config.DatetimeColumn("DISC_LOAD_TS1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "DISC_LOAD_TS2": st.column_config.DatetimeColumn("DISC_LOAD_TS2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "STACK_UNSTACK_TS1": st.column_config.DatetimeColumn("STACK_UNSTACK_TS1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "STACK_UNSTACK_TS2": st.column_config.DatetimeColumn("STACK_UNSTACK_TS2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
         },
     )
 
-    st.caption(
-        f"Menampilkan total **{format_number(len(df_display))}** potensi Combo "
-        f"(Jeda waktu kontainer 20ft antara **> {ambang_combo:.0f} menit** dan **≤ {max_gap_combo:.0f} menit**, diatur melalui slider di tab Simulasi)."
-    )
 
-
+_show_potential_combo_dialog = _show_combo_issue_dialog
 
 
 def show_combo_detail_dialog(status: str, out_df: pd.DataFrame, events: pd.DataFrame, summary: dict = None):
     """
     Menampilkan modal pop-up interaktif rincian operasional Combo
-    ('Combo', 'Single', atau 'Issue'/'Potensi').
+    ('Combo', 'Single', atau 'Potensi Combo').
     """
     if status == "Combo":
         _show_combo_dialog(out_df, events, summary)
     elif status == "Single":
         _show_single_dialog(out_df, events, summary)
-    elif status in ("Issue", "Potensi"):
+    elif status in ("Issue", "Potensi", "Potensi Combo"):
         _show_combo_issue_dialog(out_df, events, summary)
 
 
-def prepare_twinlift_table(out_df: pd.DataFrame) -> pd.DataFrame:
+def prepare_twinlift_table(out_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
-    Menyusun tabel rincian operasional Twinlift (basis kontainer 20ft).
-    Menyajikan informasi truk, kapal, crane (QC), waktu dermaga (DISC_LOAD_TS),
-    waktu lapangan (STACK_UNSTACK_TS), gap waktu, serta status Twinlift.
+    Menyusun tabel rincian operasional Twinlift dan Bukan Twinlift (basis kontainer 20ft)
+    dalam format 1 baris horizontal menyamping (Waktu Dermaga 1 & Waktu Dermaga 2)
+    agar selisih Gap dapat diverifikasi langsung secara horizontal.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    
+    Mengembalikan (df_twin_table, df_non_twin_table).
     """
     if out_df is None or len(out_df) == 0:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     # Filter basis kontainer 20ft (satu-satunya ukuran yang eligible Twinlift)
     df20 = out_df[out_df["CTR_SIZE"] == 20].copy()
     if len(df20) == 0:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     df20["TS_G"] = pd.to_datetime(df20["TS_G"])
     df20["TS_H"] = pd.to_datetime(df20["TS_H"])
 
-    truk_id = df20["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
-    ves_id = df20["VES_ID"].fillna("-").astype(str)
-    crane_id = df20["CRANE_ID"].fillna("-").astype(str)
-    activity = df20["ACTIVITY"].fillna("-").astype(str)
-    status_twin = df20["TWINLIFT_STATUS"].fillna("Bukan Twinlift").astype(str)
-    container_status = df20["CONTAINER_STATUS"].fillna("Single").astype(str)
+    # -------------------------------------------------------------
+    # 1. Tabel Twinlift (Murni pasangan 2x 20ft yang terkualifikasi Twinlift)
+    # -------------------------------------------------------------
+    df_twin_raw = df20[df20["TWINLIFT_STATUS"] == "Twinlift"].copy()
+    if len(df_twin_raw) > 0:
+        df_twin_sorted = df_twin_raw.sort_values(by=["EVENT_ID", "TS_G"]).reset_index(drop=True)
+        r1 = df_twin_sorted.iloc[0::2].reset_index(drop=True)
+        r2 = df_twin_sorted.iloc[1::2].reset_index(drop=True)
 
-    # Gap menit dibulatkan 2 desimal
-    gap_val = df20["TWINLIFT_GAP_MENIT"].fillna(0.0).round(2)
+        truk_id = r1["CAR_CHE_ID"].astype(str).str.replace(r"\.0$", "", regex=True)
+        ves_id = r1["VES_ID"].fillna("-").astype(str)
+        crane1_id = r1["CRANE_ID"].fillna("-").astype(str)
+        crane2_id = r2["CRANE_ID"].fillna("-").astype(str)
+        act = r1["ACTIVITY"].fillna("-").astype(str)
+        ctr1 = r1.get("CTR_NO", pd.Series(["-"] * len(r1))).fillna("-").astype(str)
+        ctr2 = r2.get("CTR_NO", pd.Series(["-"] * len(r2))).fillna("-").astype(str)
+        gap_m = (r2["TS_G"] - r1["TS_G"]).dt.total_seconds().abs() / 60.0
 
-    waktu_dermaga = df20["TS_G"].dt.strftime("%d/%m/%y %H:%M:%S")
-    waktu_lapangan = df20["TS_H"].dt.strftime("%d/%m/%y %H:%M:%S")
+        ringkasan_twin = truk_id + " | " + act + " (" + ves_id + ", " + crane1_id + ") | 2x 20ft"
 
-    ringkasan = (
-        truk_id
-        + " | "
-        + activity
-        + " ("
-        + ves_id
-        + ", "
-        + crane_id
-        + ") | Gap: "
-        + gap_val.apply(lambda g: format_decimal(g, 2))
-        + " mnt | "
-        + status_twin
-    )
+        df_twin = pd.DataFrame(
+            {
+                "Truk": truk_id,
+                "Format Rincian": ringkasan_twin,
+                "Event ID": r1["EVENT_ID"],
+                "Aktivitas": act,
+                "Kapal": ves_id,
+                "Crane 1": crane1_id,
+                "No Container 1": ctr1,
+                "Waktu Dermaga 1": r1["TS_G"],
+                "Crane 2": crane2_id,
+                "No Container 2": ctr2,
+                "Waktu Dermaga 2": r2["TS_G"],
+                "Gap Twinlift (Menit)": gap_m,
+                "Status Twinlift": "Twinlift",
+            }
+        ).sort_values(by=["Waktu Dermaga 1", "Event ID"]).reset_index(drop=True)
+    else:
+        df_twin = pd.DataFrame()
 
-    df20["_SORT_TS"] = df20["TS_G"]
-    df20["_TRUK"] = truk_id
-    df20["_RINGKASAN"] = ringkasan
-    df20["_VES"] = ves_id
-    df20["_CRANE"] = crane_id
-    df20["_ACT"] = activity
-    df20["_WAKTU_DERMAGA"] = waktu_dermaga
-    df20["_WAKTU_LAPANGAN"] = waktu_lapangan
-    df20["_GAP"] = gap_val
-    df20["_STATUS_TWIN"] = status_twin
-    df20["_CONTAINER_STATUS"] = container_status
+    # -------------------------------------------------------------
+    # 2. Tabel Bukan Twinlift (Pasangan Combo gagal Twinlift + Single 20ft)
+    # -------------------------------------------------------------
+    df_non_raw = df20[df20["TWINLIFT_STATUS"] != "Twinlift"].copy()
+    if len(df_non_raw) > 0:
+        records_non = []
+        for eid, grp in df_non_raw.groupby("EVENT_ID", sort=False):
+            grp_sorted = grp.sort_values(by="TS_G")
+            row1 = grp_sorted.iloc[0]
+            truk_non = str(row1["CAR_CHE_ID"]).replace(".0", "")
+            ves_non = str(row1.get("VES_ID", "-"))
+            cr1_non = str(row1.get("CRANE_ID", "-"))
+            act_non = str(row1.get("ACTIVITY", "-"))
+            ctr1_non = str(row1.get("CTR_NO", "-"))
+            ts1 = row1["TS_G"]
 
-    df20 = df20.sort_values(by=["_SORT_TS", "EVENT_ID", "_TRUK"]).reset_index(drop=True)
+            if len(grp_sorted) >= 2:
+                row2 = grp_sorted.iloc[1]
+                ts2 = row2["TS_G"]
+                cr2_non = str(row2.get("CRANE_ID", "-"))
+                ctr2_non = str(row2.get("CTR_NO", "-"))
+                gap_val = abs((ts2 - ts1).total_seconds()) / 60.0
+                crane_summary = cr1_non if cr1_non == cr2_non else f"{cr1_non}/{cr2_non}"
+                ringk_non = f"{truk_non} | {act_non} ({ves_non}, {crane_summary}) | 2x 20ft"
+                records_non.append(
+                    {
+                        "Truk": truk_non,
+                        "Format Rincian": ringk_non,
+                        "Event ID": eid,
+                        "Aktivitas": act_non,
+                        "Kapal": ves_non,
+                        "Crane 1": cr1_non,
+                        "No Container 1": ctr1_non,
+                        "Waktu Dermaga 1": ts1,
+                        "Crane 2": cr2_non,
+                        "No Container 2": ctr2_non,
+                        "Waktu Dermaga 2": ts2,
+                        "Gap Bukan Twinlift (Menit)": gap_val,
+                        "Status Twinlift": "Bukan Twinlift",
+                        "Jumlah Kontainer": len(grp_sorted),
+                    }
+                )
+            else:
+                ringk_non = f"{truk_non} | {act_non} ({ves_non}, {cr1_non}) | 1x 20ft"
+                records_non.append(
+                    {
+                        "Truk": truk_non,
+                        "Format Rincian": ringk_non,
+                        "Event ID": eid,
+                        "Aktivitas": act_non,
+                        "Kapal": ves_non,
+                        "Crane 1": cr1_non,
+                        "No Container 1": ctr1_non,
+                        "Waktu Dermaga 1": ts1,
+                        "Crane 2": "-",
+                        "No Container 2": "-",
+                        "Waktu Dermaga 2": pd.NaT,
+                        "Gap Bukan Twinlift (Menit)": None,
+                        "Status Twinlift": "Bukan Twinlift",
+                        "Jumlah Kontainer": 1,
+                    }
+                )
+        df_non = pd.DataFrame(records_non).sort_values(by=["Waktu Dermaga 1", "Event ID"]).reset_index(drop=True)
+    else:
+        df_non = pd.DataFrame()
 
-    res = pd.DataFrame(
-        {
-            "Truk": df20["_TRUK"],
-            "Format Rincian": df20["_RINGKASAN"],
-            "Event ID": df20["EVENT_ID"],
-            "Aktivitas": df20["_ACT"],
-            "Kapal": df20["_VES"],
-            "Crane": df20["_CRANE"],
-            "Waktu Dermaga": df20["_WAKTU_DERMAGA"],
-            "Waktu Lapangan": df20["_WAKTU_LAPANGAN"],
-            "Gap Twinlift": df20["_GAP"],
-            "Status Twinlift": df20["_STATUS_TWIN"],
-            "Tipe Muatan": df20["_CONTAINER_STATUS"],
-        }
-    )
-    return res
+    return df_twin, df_non
 
 
 @st.dialog("Rincian Aktivitas Twinlift (Kontainer 20ft)", width="large")
@@ -1669,99 +1969,86 @@ def _show_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
     """
     Menampilkan modal pop-up interaktif rincian operasional Twinlift
     saat tombol 'Rincian Twinlift' di bawah donut chart diklik.
+    Format 1 baris menyamping per pasangan lift (Waktu Dermaga 1 & Waktu Dermaga 2).
     """
     inject_modal_backdrop_protection()
-    df_data = prepare_twinlift_table(out_df)
-    if len(df_data) == 0:
-        st.info("Tidak ada data kontainer 20ft yang ditemukan pada dataset ini.")
+    df_twin, _ = prepare_twinlift_table(out_df)
+    if len(df_twin) == 0:
+        st.info("Tidak ada data kontainer 20ft Twinlift yang ditemukan pada dataset ini.")
         if st.button("Tutup", key="btn_close_empty_twin", type="secondary"):
             st.rerun()
         return
 
-    # Filter Toolbar: Pencarian & Filter Aktivitas
-    fc1, fc2 = st.columns([2.2, 1.2])
-    with fc1:
-        search_txt = st.text_input(
-            "🔍 Cari Truk / Kapal / Crane / Event:",
-            placeholder="Ketik ID Truk, Kapal, Crane, atau Event...",
-            key="filter_twin_search",
-        ).strip().lower()
-    with fc2:
-        act_filter = st.selectbox(
-            "Filter Aktivitas:",
-            ["Semua Aktivitas", "Hanya DISC (Bongkar)", "Hanya LOAD (Muat)"],
-            key="filter_twin_act_sel",
-        )
-
-    # Filter Berdasarkan Aktivitas Terpilih
-    if act_filter == "Hanya DISC (Bongkar)":
-        df_act = df_data[df_data["Aktivitas"] == "DISC"]
-        act_label_desc = "Hanya DISC"
-    elif act_filter == "Hanya LOAD (Muat)":
-        df_act = df_data[df_data["Aktivitas"] == "LOAD"]
-        act_label_desc = "Hanya LOAD"
-    else:
-        df_act = df_data
-        act_label_desc = "Semua Aktivitas"
-
-    # Perhitungan Metrik Dinamis Menyesuaikan Aktivitas
-    grand_total_twinlift = len(df_data[df_data["Status Twinlift"] == "Twinlift"])
-    total_20ft_act = len(df_act)
-    df_twin = df_act[df_act["Status Twinlift"] == "Twinlift"]
-    total_twinlift = len(df_twin)
-    pct_twinlift = (total_twinlift / grand_total_twinlift * 100) if grand_total_twinlift > 0 else 0.0
-    total_pasangan = total_twinlift // 2
+    # Ambil metrik ringkasan dari summary atau hitung presisi dari dataset
+    df20_all = out_df[out_df["CTR_SIZE"] == 20] if out_df is not None else pd.DataFrame()
+    total_20ft_all = len(df20_all)
+    total_pasangan = len(df_twin)
+    total_twinlift = total_pasangan * 2
+    pct_twinlift = (total_twinlift / total_20ft_all * 100.0) if total_20ft_all > 0 else 0.0
 
     truk_terlibat = df_twin["Truk"].nunique() if total_twinlift > 0 else 0
-    crane_terlibat = df_twin["Crane"].nunique() if total_twinlift > 0 else 0
-    avg_gap_twin = df_twin["Gap Twinlift"].mean() if total_twinlift > 0 else 0.0
+    crane_terlibat = df_twin["Crane 1"].nunique() if total_twinlift > 0 else 0
+    avg_gap_twin = df_twin["Gap Twinlift (Menit)"].mean() if total_twinlift > 0 else 0.0
 
-    ambang_val = summary.get("ambang_twinlift", 1.0) if summary else 1.0
-    ambang_tw_label = f"Ambang: ≤ {format_decimal(ambang_val, 0)} mnt"
+    ambang_val = float(summary.get("ambang_twinlift", 1.0)) if summary else 1.0
 
-    # KPI Summary Row (menggunakan st.metric agar konsisten dengan modal rincian bukan twinlift)
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
-        st.metric("Total Twinlift", f"{format_number(total_twinlift)} Ctr", f"{format_number(total_pasangan)} pasang lift")
-    with mk2:
-        st.metric("% Twinlift (20ft)", format_percent(pct_twinlift, 1), f"dari {format_number(grand_total_twinlift)} Ctr Twinlift")
-    with mk3:
-        st.metric("Truk & Crane", f"{format_number(truk_terlibat)} Truk", f"{format_number(crane_terlibat)} Crane (QC)")
-    with mk4:
-        st.metric("Rata-rata Gap", f"{format_decimal(avg_gap_twin, 2)} mnt", ambang_tw_label)
-
-    # Filter Pencarian Teks pada Dataframe Twinlift
-    filtered_df = df_twin.copy()
-    if search_txt:
-        mask = (
-            filtered_df["Truk"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Kapal"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Crane"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Event ID"].astype(str).str.contains(search_txt, na=False)
-            | filtered_df["Format Rincian"].str.lower().str.contains(search_txt, na=False)
+        render_kpi_card(
+            label="Total Twinlift",
+            value=f"{format_number(total_twinlift)} Ctr",
+            variant="blue",
+            tooltip=f"Total kontainer 20ft yang diangkat dengan spreader Twinlift ({format_number(total_pasangan)} pasang lift).",
         )
-        filtered_df = filtered_df[mask]
+    with mk2:
+        render_kpi_card(
+            label="% Twinlift (20ft)",
+            value=format_percent(pct_twinlift, 1),
+            variant="blue",
+            tooltip=f"Rasio kontainer Twinlift terhadap seluruh kontainer 20ft ({format_number(total_twinlift)} dari {format_number(total_20ft_all)} Ctr 20ft).",
+        )
+    with mk3:
+        render_kpi_card(
+            label="Truk & Crane",
+            value=f"{format_number(truk_terlibat)} Truk / {format_number(crane_terlibat)} QC",
+            variant="blue",
+            tooltip=f"Jumlah armada truk ({format_number(truk_terlibat)} Truk) dan Quay Crane ({format_number(crane_terlibat)} QC) unik yang terlibat.",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Rata-rata Gap",
+            value=format_duration(avg_gap_twin),
+            variant="blue",
+            tooltip=f"Rata-rata selisih waktu lifting 2 kontainer Twinlift pada QC (Batas ambang Twinlift: ≤ {format_decimal(ambang_val, 0)} menit).",
+            align_tooltip_right=True,
+        )
 
-    # Dataframe Interaktif dengan Column Config Lengkap (kolom Truk, Status Twinlift, dan Muatan Truk disembunyikan karena redundant)
-    cols_to_drop = ["Truk", "Status Twinlift", "Tipe Muatan"]
+    cols_to_drop = ["Truk", "Status Twinlift"]
+    df_twin_table = df_twin.drop(columns=cols_to_drop, errors="ignore").copy()
+    if "Gap Twinlift (Menit)" in df_twin_table.columns:
+        max_m = float(df_twin_table["Gap Twinlift (Menit)"].max() or 0.0)
+        df_twin_table["Gap"] = df_twin_table["Gap Twinlift (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_twin_table = df_twin_table.drop(columns=["Gap Twinlift (Menit)"])
+
     st.dataframe(
-        filtered_df.drop(columns=cols_to_drop, errors="ignore"),
+        df_twin_table,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="large"),
             "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
             "Kapal": st.column_config.TextColumn("Kapal", width="small"),
-            "Crane": st.column_config.TextColumn("Crane", width="small"),
-            "Waktu Dermaga": st.column_config.TextColumn("Waktu Dermaga", width="small"),
-            "Waktu Lapangan": st.column_config.TextColumn("Waktu Lapangan", width="small"),
-            "Gap Twinlift": st.column_config.NumberColumn("Gap (Mnt)", format="%.2f mnt", width="small"),
+            "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
+            "No Container 1": st.column_config.TextColumn("No Container 1", width="small"),
+            "Waktu Dermaga 1": st.column_config.DatetimeColumn("Waktu Dermaga 1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
+            "No Container 2": st.column_config.TextColumn("No Container 2", width="small"),
+            "Waktu Dermaga 2": st.column_config.DatetimeColumn("Waktu Dermaga 2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
         },
     )
-
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(total_twinlift)}** kontainer Twinlift ({act_label_desc.lower()}).")
 
 
 @st.dialog("Rincian Aktivitas Bukan Twinlift (Kontainer 20ft)", width="large")
@@ -1769,97 +2056,87 @@ def _show_non_twinlift_dialog(out_df: pd.DataFrame, summary: dict = None):
     """
     Menampilkan modal pop-up interaktif rincian operasional Bukan Twinlift (Single Lift 20ft)
     saat tombol 'Rincian Bukan Twinlift' di bawah donut chart diklik.
+    Format 1 baris menyamping per ritase/event (Waktu Dermaga 1 & Waktu Dermaga 2).
     """
     inject_modal_backdrop_protection()
-    df_data = prepare_twinlift_table(out_df)
-    if len(df_data) == 0:
-        st.info("Tidak ada data kontainer 20ft yang ditemukan pada dataset ini.")
+    _, df_non = prepare_twinlift_table(out_df)
+    if len(df_non) == 0:
+        st.info("Tidak ada data kontainer 20ft Bukan Twinlift yang ditemukan pada dataset ini.")
         if st.button("Tutup", key="btn_close_empty_nontwin", type="secondary"):
             st.rerun()
         return
 
-    # Filter Toolbar: Pencarian & Filter Aktivitas
-    fc1, fc2 = st.columns([2.2, 1.2])
-    with fc1:
-        search_txt = st.text_input(
-            "🔍 Cari Truk / Kapal / Crane / Event:",
-            placeholder="Ketik ID Truk, Kapal, Crane, atau Event...",
-            key="filter_nontwin_search",
-        ).strip().lower()
-    with fc2:
-        act_filter = st.selectbox(
-            "Filter Aktivitas:",
-            ["Semua Aktivitas", "Hanya DISC (Bongkar)", "Hanya LOAD (Muat)"],
-            key="filter_nontwin_act_sel",
-        )
+    df20_all = out_df[out_df["CTR_SIZE"] == 20] if out_df is not None else pd.DataFrame()
+    total_20ft_all = len(df20_all)
+    df_non_raw = df20_all[df20_all["TWINLIFT_STATUS"] != "Twinlift"] if len(df20_all) > 0 else pd.DataFrame()
+    total_non_twin = len(df_non_raw)
+    pct_non_twin = (total_non_twin / total_20ft_all * 100.0) if total_20ft_all > 0 else 0.0
 
-    # Filter Berdasarkan Aktivitas Terpilih
-    if act_filter == "Hanya DISC (Bongkar)":
-        df_act = df_data[df_data["Aktivitas"] == "DISC"]
-        act_label_desc = "Hanya DISC"
-    elif act_filter == "Hanya LOAD (Muat)":
-        df_act = df_data[df_data["Aktivitas"] == "LOAD"]
-        act_label_desc = "Hanya LOAD"
-    else:
-        df_act = df_data
-        act_label_desc = "Semua Aktivitas"
+    truk_terlibat = df_non["Truk"].nunique() if len(df_non) > 0 else 0
+    crane_ids = set(df_non["Crane 1"].dropna().unique()) | set(df_non["Crane 2"].dropna().unique())
+    crane_ids.discard("-")
+    crane_terlibat = len(crane_ids)
+    disc_count = int((df_non_raw["ACTIVITY"] == "DISC").sum()) if len(df_non_raw) > 0 else 0
+    load_count = int((df_non_raw["ACTIVITY"] == "LOAD").sum()) if len(df_non_raw) > 0 else 0
 
-    # Perhitungan Metrik Dinamis Menyesuaikan Aktivitas
-    grand_total_non_twin = len(df_data[df_data["Status Twinlift"] == "Bukan Twinlift"])
-    total_20ft_act = len(df_act)
-    df_non = df_act[df_act["Status Twinlift"] == "Bukan Twinlift"]
-    total_non_twin = len(df_non)
-    pct_non_twin = (total_non_twin / grand_total_non_twin * 100) if grand_total_non_twin > 0 else 0.0
-
-    truk_terlibat = df_non["Truk"].nunique() if total_non_twin > 0 else 0
-    crane_terlibat = df_non["Crane"].nunique() if total_non_twin > 0 else 0
-    disc_count = int((df_non["Aktivitas"] == "DISC").sum())
-    load_count = int((df_non["Aktivitas"] == "LOAD").sum())
-
-    # KPI Summary Row
     ambang_tw = float(summary.get("ambang_twinlift", 1.0)) if summary else 1.0
     mk1, mk2, mk3, mk4 = st.columns(4)
     with mk1:
-        st.metric("Total Bukan Twinlift", f"{format_number(total_non_twin)} Ctr", f"Batas: > {format_decimal(ambang_tw, 0)} mnt")
-    with mk2:
-        st.metric("% Bukan Twinlift", format_percent(pct_non_twin, 1), f"dari {format_number(grand_total_non_twin)} Ctr Bukan Twinlift")
-    with mk3:
-        st.metric("Truk & Crane", f"{format_number(truk_terlibat)} Truk", f"{format_number(crane_terlibat)} Crane (QC)")
-    with mk4:
-        st.metric("Aktivitas Operasi", f"{format_number(disc_count)} DISC", f"{format_number(load_count)} LOAD")
-
-    # Filter Pencarian Teks pada Dataframe Bukan Twinlift
-    filtered_df = df_non.copy()
-    if search_txt:
-        mask = (
-            filtered_df["Truk"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Kapal"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Crane"].str.lower().str.contains(search_txt, na=False)
-            | filtered_df["Event ID"].astype(str).str.contains(search_txt, na=False)
-            | filtered_df["Format Rincian"].str.lower().str.contains(search_txt, na=False)
+        render_kpi_card(
+            label="Total Bukan Twinlift",
+            value=f"{format_number(total_non_twin)} Ctr",
+            variant="blue",
+            tooltip=f"Total kontainer 20ft yang diangkat secara Single Lift (Batas ambang Twinlift: > {format_decimal(ambang_tw, 0)} menit).",
         )
-        filtered_df = filtered_df[mask]
+    with mk2:
+        render_kpi_card(
+            label="% Bukan Twinlift",
+            value=format_percent(pct_non_twin, 1),
+            variant="blue",
+            tooltip=f"Rasio kontainer Bukan Twinlift terhadap seluruh kontainer 20ft ({format_number(total_non_twin)} dari {format_number(total_20ft_all)} Ctr 20ft).",
+        )
+    with mk3:
+        render_kpi_card(
+            label="Truk & Crane",
+            value=f"{format_number(truk_terlibat)} Truk / {format_number(crane_terlibat)} QC",
+            variant="blue",
+            tooltip=f"Jumlah armada truk ({format_number(truk_terlibat)} Truk) dan Quay Crane ({format_number(crane_terlibat)} QC) unik yang terlibat.",
+        )
+    with mk4:
+        render_kpi_card(
+            label="Komposisi DISC / LOAD",
+            value=f"{format_number(disc_count)} / {format_number(load_count)}",
+            variant="blue",
+            tooltip=f"Rincian jumlah kontainer Bongkar (DISC: {format_number(disc_count)} Ctr) dan Muat (LOAD: {format_number(load_count)} Ctr) yang berstatus Bukan Twinlift.",
+            align_tooltip_right=True,
+        )
 
-    # Dataframe Interaktif dengan Column Config Lengkap (kolom Truk, Status Twinlift, dan Muatan Truk disembunyikan karena redundant)
-    cols_to_drop = ["Truk", "Status Twinlift", "Tipe Muatan"]
+    cols_to_drop = ["Truk", "Status Twinlift", "Jumlah Kontainer"]
+    df_non_twin_table = df_non.drop(columns=cols_to_drop, errors="ignore").copy()
+    if "Gap Bukan Twinlift (Menit)" in df_non_twin_table.columns:
+        max_m = float(df_non_twin_table["Gap Bukan Twinlift (Menit)"].max() or 0.0)
+        df_non_twin_table["Gap"] = df_non_twin_table["Gap Bukan Twinlift (Menit)"].apply(lambda v: format_duration_sortable(v, max_m))
+        df_non_twin_table = df_non_twin_table.drop(columns=["Gap Bukan Twinlift (Menit)"])
+
     st.dataframe(
-        filtered_df.drop(columns=cols_to_drop, errors="ignore"),
+        df_non_twin_table,
         use_container_width=True,
         hide_index=True,
-        height=450,
+        height=600,
         column_config={
-            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="medium"),
+            "Format Rincian": st.column_config.TextColumn("Ringkasan Operasional", width="large"),
             "Event ID": st.column_config.NumberColumn("Event ID", format="%d", width="small"),
             "Aktivitas": st.column_config.TextColumn("Aktivitas", width="small"),
             "Kapal": st.column_config.TextColumn("Kapal", width="small"),
-            "Crane": st.column_config.TextColumn("Crane", width="small"),
-            "Waktu Dermaga": st.column_config.TextColumn("Waktu Dermaga", width="small"),
-            "Waktu Lapangan": st.column_config.TextColumn("Waktu Lapangan", width="small"),
-            "Gap Twinlift": st.column_config.NumberColumn("Gap (Mnt)", format="%.2f mnt", width="small"),
+            "Crane 1": st.column_config.TextColumn("Crane 1", width="small"),
+            "No Container 1": st.column_config.TextColumn("No Container 1", width="small"),
+            "Waktu Dermaga 1": st.column_config.DatetimeColumn("Waktu Dermaga 1", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Crane 2": st.column_config.TextColumn("Crane 2", width="small"),
+            "No Container 2": st.column_config.TextColumn("No Container 2", width="small"),
+            "Waktu Dermaga 2": st.column_config.DatetimeColumn("Waktu Dermaga 2", format="DD/MM/YY HH:mm:ss", width="small"),
+            "Gap": st.column_config.TextColumn("Gap", width="small"),
         },
     )
-
-    st.caption(f"Menampilkan **{format_number(len(filtered_df))}** dari total **{format_number(total_non_twin)}** kontainer Bukan Twinlift ({act_label_desc.lower()} - Jeda lifting > **{format_decimal(ambang_tw, 0)}** menit atau lifting tunggal).")
 
 
 
@@ -1905,7 +2182,8 @@ def _get_optimized_preview_uri(gif_file: Path) -> str:
                 except Exception:
                     pass
 
-            from PIL import Image, ImageSequence
+            from PIL import Image, ImageFile, ImageSequence
+            ImageFile.LOAD_TRUNCATED_IMAGES = True
             im = Image.open(gif_file)
             w, h = im.size
             new_w = min(w, 380)
@@ -1955,7 +2233,7 @@ def _build_parameter_tooltip(param_key: str, file_sig: str) -> str:
 
     gif_candidates = {
         "combo": [
-            "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
+            "gifs/combotruck.gif", "gifs/combotruck.webp", "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
             "combo.gif", "combo.webp",
         ],
         "dual_cycle": [
@@ -2015,7 +2293,7 @@ def get_parameter_tooltip(param_key: str) -> str:
     """
     gif_candidates = {
         "combo": [
-            "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
+            "gifs/combotruck.gif", "gifs/combotruck.webp", "gifs/combo.gif", "gifs/combo.webp", "gifs/combo_20ft.gif", "gifs/combo-20ft.gif", "gifs/combo.png",
             "combo.gif", "combo.webp",
         ],
         "dual_cycle": [

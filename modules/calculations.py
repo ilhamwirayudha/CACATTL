@@ -83,7 +83,10 @@ def bersihkan_ves_id(series: pd.Series) -> pd.Series:
 
 
 def siapkan_data(raw: pd.DataFrame, col_map: dict, size_eligible: int) -> pd.DataFrame:
-    """Membersihkan dan menyiapkan kolom data operasional standar secara tervektorisasi cepat."""
+    """
+    Membersihkan dan menyiapkan kolom data operasional standar secara tervektorisasi cepat.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
     df = pd.DataFrame()
     df["VES_ID"] = bersihkan_ves_id(raw[col_map["ves_id"]])
 
@@ -97,6 +100,14 @@ def siapkan_data(raw: pd.DataFrame, col_map: dict, size_eligible: int) -> pd.Dat
         df["CTR_SIZE"] = pd.to_numeric(extracted, errors="coerce").fillna(0.0).astype(float)
 
     df["CAR_CHE_ID"] = raw[col_map["truck"]].astype(str).str.strip()
+
+    # Kolom No Kontainer (CTR_NO)
+    ctr_no_col = col_map.get("ctr_no")
+    if ctr_no_col and ctr_no_col in raw.columns:
+        df["CTR_NO"] = raw[ctr_no_col].astype(str).str.strip()
+        df.loc[df["CTR_NO"].isin(["", "nan", "None", "NaT"]), "CTR_NO"] = "-"
+    else:
+        df["CTR_NO"] = "-"
 
     # Kolom Crane (QC) bersifat opsional — dipakai untuk syarat 'sama crane' pada
     # deteksi Twinlift & laporan performa Twinlift per Crane. Jika tidak dipetakan,
@@ -145,6 +156,7 @@ def layer1_combo(df: pd.DataFrame, ambang_combo: float, size_eligible: int) -> p
     """
     Layer 1: Identifikasi kontainer berukuran 20ft dari truk & aktivitas sama
     yang memenuhi ambang batas waktu Combo (O(m log m) sliding window greedy).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     n = len(df)
     ts_g = df["TS_G"].to_numpy()
@@ -184,7 +196,8 @@ def layer1_combo(df: pd.DataFrame, ambang_combo: float, size_eligible: int) -> p
             for i, k in found:
                 gap_g = abs((ts_g[k] - ts_g[i]) / np.timedelta64(1, "m"))
                 gap_h = abs((ts_h[k] - ts_h[i]) / np.timedelta64(1, "m"))
-                gap = min(gap_g, gap_h)
+                # Prioritas utama cek Gap Dermaga (ts_g); jika melebihi ambang, fallback ke Gap Lapangan (ts_h)
+                gap = gap_g if gap_g <= ambang_combo else gap_h
                 pairs.append((i, k, gap))
 
     pairs.sort(key=lambda x: (x[2], x[0], x[1]))
@@ -214,6 +227,7 @@ def deteksi_twinlift(df_combo: pd.DataFrame, ambang_twinlift: float, size_eligib
     untuk kegiatan di dermaga, baik bongkar (DISC) maupun muat (LOAD): Combo
     dibentuk per aktivitas, sehingga 2 kontainer dalam 1 Combo selalu punya
     aktivitas yang sama, dan tidak ada filter yang membatasi hanya DISC.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     Syarat lengkap:
     1. Ukuran 20ft
     2. VES_ID (kapal) sama
@@ -268,7 +282,10 @@ def deteksi_twinlift(df_combo: pd.DataFrame, ambang_twinlift: float, size_eligib
 
 
 def bentuk_event(df: pd.DataFrame) -> pd.DataFrame:
-    """Membentuk event ritase truk dari grup hasil Layer 1 (vektorisasi cepat)."""
+    """
+    Membentuk event ritase truk dari grup hasil Layer 1 (vektorisasi cepat).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
     is_disc = df["ACTIVITY"].to_numpy() == "DISC"
     evt_start = np.where(is_disc, df["TS_G"].to_numpy(), df["TS_H"].to_numpy())
     evt_end = np.where(is_disc, df["TS_H"].to_numpy(), df["TS_G"].to_numpy())
@@ -305,17 +322,13 @@ def layer2_dual(events: pd.DataFrame, ambang_dual: float) -> pd.DataFrame:
     """
     Layer 2: Deteksi pasangan Dual Cycle lintas aktivitas (LOAD vs DISC)
     dalam truk yang sama.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
 
-    Gap antar dua event dihitung dari akhir event yang lebih dulu sampai awal
-    event berikutnya. Karena titik awal/akhir tiap aktivitas berbeda, lokasi
-    pengukuran gap otomatis mengikuti urutan aktivitasnya:
-    - DISC dulu lalu LOAD -> gap di LAPANGAN (selesai stack DISC -> mulai
-      unstack LOAD, keduanya memakai STACK_UNSTACK_TS).
-    - LOAD dulu lalu DISC -> gap di DERMAGA (selesai muat LOAD -> mulai
-      bongkar DISC, keduanya memakai DISC_LOAD_TS).
+    Gap antar dua event dihitung dari waktu selesai (terakhir) aktivitas pertama
+    ke waktu mulai (pertama) aktivitas kedua:
+    - DISC ➔ LOAD : Waktu LOAD Pertama (START_TS_LOAD) dikurangi Waktu DISC Terakhir (END_TS_DISC)
+    - LOAD ➔ DISC : Waktu DISC Pertama (START_TS_DISC) dikurangi Waktu LOAD Terakhir (END_TS_LOAD)
     Pasangan hanya dianggap Dual Cycle bila gap <= ambang_dual (menit).
-    Untuk tiap pasangan, dicatat: urutan, lokasi gap, gap (menit), ambang, dan
-    selisih ambang - gap (sisa toleransi).
     """
     events = events.reset_index(drop=True)
     n = len(events)
@@ -414,6 +427,7 @@ def isi_pasangan_dual(events: pd.DataFrame) -> pd.DataFrame:
     Mengisi DUAL_PASANGAN_EVENT_ID: EVENT_ID dari event pasangan Dual Cycle-nya.
     Dipanggil setelah EVENT_ID dibuat. Tiap pasangan berisi tepat 2 event,
     sehingga pasangan = (jumlah EVENT_ID pasangan) - EVENT_ID sendiri.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     events = events.copy()
     events["DUAL_PASANGAN_EVENT_ID"] = np.nan
@@ -433,6 +447,7 @@ def klasifikasi_dual_murni_campuran(out_df: pd.DataFrame) -> pd.DataFrame:
     - "Campuran" : pasangan Dual Cycle-nya melibatkan kontainer dari kapal lain.
     - "-"        : bukan Dual Cycle.
     Hasil disimpan di kolom DUAL_JENIS.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     out = out_df.copy()
     jenis = pd.Series("-", index=out.index, dtype=object)
@@ -479,6 +494,7 @@ def hitung_performa_crane(out_df: pd.DataFrame, size_eligible: int) -> pd.DataFr
     Menghitung performa tiap Crane (QC) dalam pembentukan Twinlift.
     Basis perhitungan per baris kontainer (bukan per event), karena crane
     bekerja mengangkat kontainer satu per satu.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
 
     Kolom hasil:
     - total_kontainer         : semua kontainer yang ditangani crane tsb
@@ -519,6 +535,7 @@ def hitung_breakdown_waktu(events: pd.DataFrame) -> dict:
     - per hari (TANGGAL)
     - per shift (3 shift kerja: 00.00-08.00, 08.00-16.00, 16.00-00.00)
     - per hari x shift (gabungan, untuk melihat tren shift dari hari ke hari)
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
 
     Catatan: breakdown ini berbasis EVENT (ritase truk) untuk Dual Cycle, yang
     memang tidak terkait ukuran kontainer. Untuk breakdown Combo/Single &
@@ -756,7 +773,10 @@ def filter_dataset_by_period(events: pd.DataFrame, out_df: pd.DataFrame, start_d
 
 
 def hitung_ringkasan(events: pd.DataFrame, out_df: pd.DataFrame, size_eligible: int = SIZE_ELIGIBLE) -> dict:
-    """Menghitung ringkasan statistik komprehensif, metrik KPI, dan agregasi bulanan."""
+    """
+    Menghitung ringkasan statistik komprehensif, metrik KPI, dan agregasi bulanan.
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
     total_event = len(events)
     total_dual = int((events["STATUS"] == "Dual Cycle").sum())
     total_single = total_event - total_dual
@@ -957,6 +977,7 @@ def proses_analisis_lengkap(
     """
     Fungsi orkestrasi pipeline kalkulasi lengkap dari raw DataFrame sampai summary.
     Mengembalikan (out_df, events, summary).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
     """
     if progress_callback:
         progress_callback(12, "Menyiapkan & memvalidasi data...", "Standardisasi kolom data")
