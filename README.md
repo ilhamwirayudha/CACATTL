@@ -81,9 +81,9 @@ Hasil analisis disajikan ke dalam Mini Card KPI Interaktif dan 4 Tab Analitik:
 #### **Tab 1: Dual Cycle**
 - **Donut Chart Dual Cycle vs Non Dual**: Menampilkan proporsi ketercapaian Dual Cycle.
 - **3 Tombol Modal Rincian Cepat**:
-  - `🔍 Rincian Dual Cycle`: Menampilkan tabel transparan waktu `Mulai DISC`, `Selesai DISC`, `Mulai LOAD`, `Selesai LOAD`, nilai `Gap`, serta **deteksi baris anomali berlatar merah halus** untuk jeda waktu transisi $< 10\text{ menit}$.
+  - `🔍 Rincian Dual Cycle`: Menampilkan tabel transparan waktu `Mulai DISC`, `Selesai DISC`, `Mulai LOAD`, `Selesai LOAD`, nilai `Gap`, serta **deteksi baris anomali berlatar merah halus** untuk jeda waktu transisi < 10m 00s.
   - `🔍 Rincian Non Dual`: Menampilkan rincian ritase muatan satu arah lengkap dengan durasi pergerakannya.
-  - `💡 Potensi Dual Cycle`: Mengidentifikasi pasangan ritase Non-Dual yang berurutan bergantian (`DISC ➔ LOAD` atau `LOAD ➔ DISC`) dengan jeda antara $30\text{ mnt} < \text{Gap} \le 180\text{ mnt}$ sebagai sasaran optimasi operasional.
+  - `💡 Potensi Dual Cycle`: Mengidentifikasi pasangan ritase Non-Dual yang berurutan bergantian (`DISC ➔ LOAD` atau `LOAD ➔ DISC`) dengan jeda antara 30 mnt < Gap ≤ 180 mnt sebagai sasaran optimasi operasional.
 - **Breakdown Bulanan Dual Cycle vs Non Dual**: Grafik tren bulanan dilengkapi input **Target Optimal (%)** dan sakelar garis target yang diisolasi dengan `@st.fragment` (perubahan angka target tidak mereload halaman).
 - **Breakdown Waktu Operasional (3 Shift Kerja)**: Analisis performa per shift standar pelabuhan:
   - **Shift 1**: `00.00 – 08.00`
@@ -92,10 +92,10 @@ Hasil analisis disajikan ke dalam Mini Card KPI Interaktif dan 4 Tab Analitik:
 
 #### **Tab 2: Twinlift & Combo**
 - **Filter Lingkup Evaluasi Twinlift (Radio Button Scope)**:
-  - `Internasional` *(Default)*: Mengisolasi evaluasi khusus kade internasional (Quay Crane ID berakhiran `"I"`: `01I` – `05I`) dengan rasio Twinlift riil $\approx 67\%$.
+  - `Internasional` *(Default)*: Mengisolasi evaluasi khusus kade internasional (Quay Crane ID berakhiran `"I"`: `01I` – `05I`) dengan rasio Twinlift riil ≈ 67%.
   - `Domestik & Internasional`: Mengevaluasi seluruh kade terminal.
 - **Donut Chart Twinlift vs Bukan Twinlift** (berbasis kontainer 20ft) bersanding dengan tombol `🔍 Rincian Twinlift` dan `🔍 Rincian Bukan Twinlift` dalam format tabel 1 baris horizontal menyamping.
-- **Donut Chart Combo vs Single** (berbasis kontainer 20ft) bersanding dengan tombol `🔍 Rincian Combo`, `🔍 Rincian Single`, dan `💡 Potensi Combo` (peluang Combo tertunda $3\text{ mnt} < \text{Gap} \le 30\text{ mnt}$).
+- **Donut Chart Combo vs Single** (berbasis kontainer 20ft) bersanding dengan tombol `🔍 Rincian Combo`, `🔍 Rincian Single`, dan `💡 Potensi Combo` (peluang Combo tertunda 3 mnt < Gap ≤ 30 mnt).
 - **Breakdown Bulanan Khusus Kontainer 20ft**: Visualisasi tren bulanan Combo vs Single dan Twinlift vs Bukan Twinlift.
 - **Tabel Performa Quay Crane (QC)**: Pemeringkatan crane berdasarkan `% Twinlift dari 20ft` (metrik utama produktivitas alat).
 
@@ -121,20 +121,20 @@ Seluruh logika perhitungan di [modules/calculations.py](modules/calculations.py)
 
 ```mermaid
 flowchart TD
-    Raw[Log Data TOS Mentah] --> Norm[Standardisasi & Mapping Kolom Dinamis]
-    Norm --> L1[Layer 1: Deteksi Combo 20ft\nIf-Else Bertingkat: Dermaga -> Lapangan <= 3 Menit]
-    L1 --> L1b[Layer 1b: Deteksi Twinlift\n6 Syarat Mutlak & Crane Internasional 'I' <= 1 Menit]
-    L1 --> Event[Rekonstruksi Event Ritase Truk\nDISC: TS_G -> TS_H | LOAD: TS_H -> TS_G]
-    Event --> L2[Layer 2: Deteksi Dual Cycle\nGreedy Matching Lintas DISC vs LOAD <= 30 Menit]
-    L2 --> Summary[Agregasi Metrik & Evaluasi Potensi\nBasis Kontainer 20ft & Shift Operasional]
+    Raw["Log Data TOS Mentah"] --> Norm["Standardisasi & Mapping Kolom Dinamis"]
+    Norm --> L1["Layer 1: Deteksi Combo 20ft<br/>Prioritas Dermaga Fallback Lapangan &le; 3 Menit"]
+    L1 --> L1b["Layer 1b: Deteksi Twinlift<br/>6 Syarat Mutlak & Crane Internasional 'I' &le; 1 Menit"]
+    L1 --> Event["Rekonstruksi Event Ritase Truk<br/>DISC: TS_G ke TS_H / LOAD: TS_H ke TS_G"]
+    Event --> L2["Layer 2: Deteksi Dual Cycle<br/>Greedy Matching Lintas DISC vs LOAD &le; 30 Menit"]
+    L2 --> Summary["Agregasi Metrik & Evaluasi Potensi<br/>Basis Kontainer 20ft & Shift Operasional"]
 ```
 
 ### 1. Layer 1 — Pembentukan Combo & Single (Kontainer 20ft)
-- Kualifikasi: Kontainer ukuran 20ft, truk (`CAR_CHE_ID`) sama, dan aktivitas (`ACTIVITY`: `DISC` atau `LOAD`) sama.
+- **Kualifikasi**: Kontainer ukuran 20ft, armada truk (`CAR_CHE_ID`) sama, dan aktivitas (`ACTIVITY`: `DISC` atau `LOAD`) sama.
 - **Formula Gap Combo (`if-else` Bertingkat)**:
-  1. **Prioritas 1 (Dermaga)**: $\text{gap\_dermaga} = |\text{TS\_G}_2 - \text{TS\_G}_1|$. Jika $\text{gap\_dermaga} \le \text{ambang\_combo}$ (3 mnt), gunakan $\text{gap\_dermaga}$.
-  2. **Prioritas 2 (Fallback Lapangan)**: Jika $\text{gap\_dermaga} > \text{ambang\_combo}$, hitung $\text{gap\_lapangan} = |\text{TS\_H}_2 - \text{TS\_H}_1|$. Gunakan $\text{gap\_lapangan}$.
-  3. **Gagal Keduanya**: Jika keduanya $> \text{ambang\_combo}$, kontainer dinyatakan berstatus **Single** (1x 20ft).
+  1. **Prioritas 1 (Dermaga)**: Hitung `gap_dermaga = |TS_G2 - TS_G1|`. Jika `gap_dermaga <= ambang_combo` (≤ 3 menit), gunakan `gap_dermaga`.
+  2. **Prioritas 2 (Fallback Lapangan)**: Jika `gap_dermaga > ambang_combo`, hitung `gap_lapangan = |TS_H2 - TS_H1|`. Gunakan `gap_lapangan`.
+  3. **Gagal Keduanya**: Jika keduanya `> ambang_combo` (> 3 menit), kontainer berstatus **Single** (1x 20ft).
 
 ### 2. Layer 1b — Deteksi Pengangkatan Twinlift
 Dievaluasi dari pasangan Combo 20ft dengan 6 syarat mutlak:
@@ -143,22 +143,24 @@ Dievaluasi dari pasangan Combo 20ft dengan 6 syarat mutlak:
 3. Truk (`CAR_CHE_ID`) sama (otomatis terjamin dari Layer 1).
 4. Quay Crane (`CRANE_ID`) sama.
 5. Crane berada di kade internasional (ID berakhiran `"I"`: `01I` – `05I`). Crane kade domestik (`"D"`) secara fisik tidak melayani Twinlift sehingga selalu berstatus `"Bukan Twinlift"`.
-6. Selisih waktu dermaga $|\text{TS\_G}_2 - \text{TS\_G}_1| \le \text{ambang\_twinlift}$ (1 menit).
+6. Selisih waktu dermaga `|TS_G2 - TS_G1| <= ambang_twinlift` (≤ 1 menit).
 
 ### 3. Rekonstruksi Event Ritase Truk
 Titik waktu mulai (`START_TS`) dan selesai (`END_TS`) per ritase mengikuti alur fisik pergerakan kontainer:
 - **DISC (Bongkar)**: Mulai di Dermaga dan Selesai di Lapangan Penumpukan:
-  $$\text{START\_TS} = \min(\text{TS\_G}), \quad \text{END\_TS} = \max(\text{TS\_H})$$
+  - `START_TS = min(TS_G)`
+  - `END_TS = max(TS_H)`
 - **LOAD (Muat)**: Mulai di Lapangan Penumpukan dan Selesai di Dermaga:
-  $$\text{START\_TS} = \min(\text{TS\_H}), \quad \text{END\_TS} = \max(\text{TS\_G})$$
+  - `START_TS = min(TS_H)`
+  - `END_TS = max(TS_G)`
 
 ### 4. Layer 2 — Deteksi & Gap Dual Cycle (50,1% / 2.062 Ritase)
 Mencocokkan event ritase berlawanan (`DISC` vs `LOAD`) pada truk yang sama:
-- **DISC ➔ LOAD**: $\text{Gap} = \text{Mulai LOAD} - \text{Selesai DISC} = \text{START\_TS\_LOAD} - \text{END\_TS\_DISC}$
-- **LOAD ➔ DISC**: $\text{Gap} = \text{Mulai DISC} - \text{Selesai LOAD} = \text{START\_TS\_DISC} - \text{END\_TS\_LOAD}$
+- **DISC ➔ LOAD**: `Gap = Mulai LOAD - Selesai DISC = START_TS_LOAD - END_TS_DISC`
+- **LOAD ➔ DISC**: `Gap = Mulai DISC - Selesai LOAD = START_TS_DISC - END_TS_LOAD`
 - **Aturan Overlap Pencatatan Transisi**:
-  Jika terjadi overlap, hanya dikualifikasikan apabila $\text{overlap} = \min(|\text{gap}_{ab}|, |\text{gap}_{ba}|) \le 10.0\text{ menit}$ dan $\text{start\_diff} \le \text{ambang} + 60\text{ menit}$. Overlap puluhan jam/lintas hari otomatis tereliminasi ke Non-Dual.
-- **Kualifikasi**: Dinyatakan Dual Cycle jika $\text{round}(\text{gap}, 1) \le \text{ambang\_dual}$ (default 30 menit).
+  Jika terjadi overlap, hanya dikualifikasikan apabila `overlap = min(|gap_ab|, |gap_ba|) <= 10.0 menit` dan `start_diff <= ambang_dual + 60 menit`. Overlap puluhan jam atau lintas hari otomatis tereliminasi ke Non-Dual.
+- **Kualifikasi**: Dinyatakan Dual Cycle jika `round(gap, 1) <= ambang_dual` (default ≤ 30 menit).
 
 ### 5. Basis Populasi Kontainer 20ft untuk Metrik Combo & Twinlift
 - Persentase `% Combo` dan `% Twinlift` **wajib dihitung dari populasi kontainer 20ft eligible saja**, bukan dari total seluruh kontainer (20ft, 40ft, 45ft), guna mencegah angka persentase bias rendah palsu.
