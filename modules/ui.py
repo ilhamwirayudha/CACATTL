@@ -683,7 +683,7 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
     # - DISC ➔ LOAD: START_TS_LOAD - END_TS_DISC
     # - LOAD ➔ DISC: START_TS_DISC - END_TS_LOAD
     # Jika terjadi overlap (keduanya negatif), gunakan nilai mutlak overlap riil
-    # min(|gap_forward|, |gap_backward|) persis seperti DUAL_GAP_MENIT di layer2_dual.
+    # min(|gap_forward|, |gap_backward|) secara presisi ke detik (tanpa pembulatan).
     # =========================================================================
     gap_forward = (merged["START_TS_LOAD"] - merged["END_TS_DISC"]).dt.total_seconds() / 60.0
     gap_backward = (merged["START_TS_DISC"] - merged["END_TS_LOAD"]).dt.total_seconds() / 60.0
@@ -691,11 +691,7 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
 
     merged["URUTAN"] = np.where(disc_first, "DISC ➔ LOAD", "LOAD ➔ DISC")
     raw_gap = np.where(disc_first, gap_forward, gap_backward)
-    if "DUAL_GAP_MENIT_DISC" in merged.columns and merged["DUAL_GAP_MENIT_DISC"].notna().any():
-        fallback_overlap = merged["DUAL_GAP_MENIT_DISC"].fillna(overlap_gap)
-    else:
-        fallback_overlap = overlap_gap
-    merged["GAP_MENIT"] = np.where(raw_gap >= 0.0, raw_gap, fallback_overlap).round(1)
+    merged["GAP_MENIT"] = np.where(raw_gap >= 0.0, raw_gap, overlap_gap)
 
     merged["WAKTU_DISC"] = (
         merged["START_TS_DISC"].dt.strftime("%d/%m/%y %H:%M:%S") + " - " + merged["END_TS_DISC"].dt.strftime("%H:%M:%S")
@@ -762,7 +758,7 @@ def prepare_dual_cycle_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.D
             "Mulai LOAD": merged["START_TS_LOAD"],
             "Selesai LOAD": merged["END_TS_LOAD"],
             "Gap (Menit)": merged["GAP_MENIT"],
-            "Anomali": np.where(merged["GAP_MENIT"] < 10.0, "Anomali", "Normal"),
+            "Anomali": np.where(merged["GAP_MENIT"] < 1.0, "Anomali", "Normal"),
             "IS_FAST": is_fast_s.loc[merged.index].values if hasattr(is_fast_s, 'loc') else is_fast_s,
         }
     )
@@ -851,6 +847,10 @@ def prepare_non_dual_table(events: pd.DataFrame, out_df: pd.DataFrame) -> pd.Dat
 
 @st.dialog("Rincian Aktivitas Dual-Cycle", width="large")
 def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary: dict = None):
+    """
+    Menampilkan modal pop-up rincian aktivitas Dual Cycle beserta highlight anomali (< 01m 00s).
+    [LOCKED LOGIC - DO NOT MODIFY WITHOUT EXPLICIT USER CONFIRMATION]
+    """
     # Proteksi modal: hanya bisa ditutup melalui tombol 'X' di pojok kanan atas
     inject_modal_backdrop_protection()
 
@@ -983,7 +983,7 @@ def _show_dual_cycle_dialog(events: pd.DataFrame, out_df: pd.DataFrame, summary:
             <div style="display: inline-flex; align-items: center; gap: 7px; background: rgba(239, 68, 68, 0.12); border: 1px solid rgba(239, 68, 68, 0.32); padding: 4px 12px; border-radius: 6px;">
                 <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background-color: #ef4444; box-shadow: 0 0 6px rgba(239, 68, 68, 0.6);"></span>
                 <span style="font-size: 0.8rem; color: #fca5a5; font-weight: 500; font-family: 'Plus Jakarta Sans', sans-serif;">
-                    Baris Merah: Anomali (Gap &lt; 10m 00s)
+                    Baris Merah: Anomali (Gap &lt; 01m 00s)
                 </span>
             </div>
         </div>
@@ -1137,10 +1137,10 @@ def prepare_potential_dual_table(
             # Murni mengambil pasangan dari aktivitas Non-Dual dengan aktivitas bergantian
             if activity[i] != activity[k] and status[i] == "Non Dual" and status[k] == "Non Dual":
                 # Waktu mulai event kedua dikurangi waktu selesai event pertama
-                gap = (start[k] - end[i]) / np.timedelta64(1, "m")
+                gap = float((start[k] - end[i]) / np.timedelta64(1, "m"))
                 gap_r = round(gap, 1)
                 if gap_r > ambang_dual and gap_r <= effective_max_gap:
-                    candidate_pairs.append((i, k, gap_r))
+                    candidate_pairs.append((i, k, gap_r, gap))
 
     if not candidate_pairs:
         return pd.DataFrame()
@@ -1150,7 +1150,7 @@ def prepare_potential_dual_table(
     assigned = set()
     potential_list = []
 
-    for i, k, gap_r in candidate_pairs:
+    for i, k, _gap_r, gap in candidate_pairs:
         if i not in assigned and k not in assigned:
             assigned.add(i)
             assigned.add(k)
@@ -1164,7 +1164,7 @@ def prepare_potential_dual_table(
             ves2 = ves_map.get(eid2, "-")
             cr1 = str(ev.loc[i, "CRANE_ID"]) if "CRANE_ID" in ev.columns and pd.notna(ev.loc[i, "CRANE_ID"]) else "-"
             cr2 = str(ev.loc[k, "CRANE_ID"]) if "CRANE_ID" in ev.columns and pd.notna(ev.loc[k, "CRANE_ID"]) else "-"
-            gap_str = format_duration(gap_r)
+            gap_str = format_duration(gap)
             ringkasan = f"{truk_id} | {act1} ({ves1}, {cr1}) ➔ {gap_str} ➔ {act2} ({ves2}, {cr2})"
 
             if act1 == "DISC":
@@ -1193,8 +1193,8 @@ def prepare_potential_dual_table(
                     "Crane LOAD": crane_load,
                     "Mulai LOAD": t_mulai_load,
                     "Selesai LOAD": t_selesai_load,
-                    "Gap (Menit)": gap_r,
-                    "Kelebihan Ambang": round(gap_r - ambang_dual, 1),
+                    "Gap (Menit)": gap,
+                    "Kelebihan Ambang": max(0.0, gap - ambang_dual),
                 }
             )
 
@@ -1516,7 +1516,7 @@ def prepare_potential_combo_table(
             gap_r = round(gap_min, 1)
 
             if gap_r > ambang_combo and gap_r <= effective_max_gap:
-                candidate_pairs.append((i, i + 1, gap_r, r1, r2, truck, act))
+                candidate_pairs.append((i, i + 1, gap_r, gap_min, r1, r2, truck, act))
 
     if not candidate_pairs:
         return pd.DataFrame()
@@ -1526,7 +1526,7 @@ def prepare_potential_combo_table(
     assigned = set()
     potentials = []
 
-    for idx1, idx2, gap_r, r1, r2, truck, act in candidate_pairs:
+    for idx1, idx2, _gap_r, gap_min, r1, r2, truck, act in candidate_pairs:
         eid1 = r1["EVENT_ID"] if "EVENT_ID" in r1 else idx1
         eid2 = r2["EVENT_ID"] if "EVENT_ID" in r2 else idx2
 
@@ -1539,7 +1539,7 @@ def prepare_potential_combo_table(
             ves2 = str(r2.get("VES_ID", "-"))
             cr1 = str(r1.get("CRANE_ID", "-"))
             cr2 = str(r2.get("CRANE_ID", "-"))
-            gap_str = format_duration(gap_r)
+            gap_str = format_duration(gap_min)
             ringkasan = f"{truk_id} | {act} ({ves1}, {cr1}) ➔ {gap_str} ➔ {act} ({ves2}, {cr2})"
 
             potentials.append(
@@ -1555,8 +1555,8 @@ def prepare_potential_combo_table(
                     "DISC_LOAD_TS2": pd.to_datetime(r2.get("TS_G")),
                     "STACK_UNSTACK_TS1": pd.to_datetime(r1.get("TS_H")),
                     "STACK_UNSTACK_TS2": pd.to_datetime(r2.get("TS_H")),
-                    "Gap (Menit)": gap_r,
-                    "Kelebihan Ambang": round(gap_r - ambang_combo, 1),
+                    "Gap (Menit)": gap_min,
+                    "Kelebihan Ambang": max(0.0, gap_min - ambang_combo),
                 }
             )
 

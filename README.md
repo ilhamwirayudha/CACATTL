@@ -81,7 +81,7 @@ Hasil analisis disajikan ke dalam Mini Card KPI Interaktif dan 4 Tab Analitik:
 #### **Tab 1: Dual Cycle**
 - **Donut Chart Dual Cycle vs Non Dual**: Menampilkan proporsi ketercapaian Dual Cycle.
 - **3 Tombol Modal Rincian Cepat**:
-  - `🔍 Rincian Dual Cycle`: Menampilkan tabel transparan waktu `Mulai DISC`, `Selesai DISC`, `Mulai LOAD`, `Selesai LOAD`, nilai `Gap`, serta **deteksi baris anomali berlatar merah halus** untuk jeda waktu transisi < 10m 00s.
+  - `🔍 Rincian Dual Cycle`: Menampilkan tabel transparan waktu `Mulai DISC`, `Selesai DISC`, `Mulai LOAD`, `Selesai LOAD`, nilai `Gap`, serta **deteksi baris anomali berlatar merah halus** untuk jeda waktu transisi < 01m 00s.
   - `🔍 Rincian Non Dual`: Menampilkan rincian ritase muatan satu arah lengkap dengan durasi pergerakannya.
   - `💡 Potensi Dual Cycle`: Mengidentifikasi pasangan ritase Non-Dual yang berurutan bergantian (`DISC ➔ LOAD` atau `LOAD ➔ DISC`) dengan jeda antara 30 mnt < Gap ≤ 180 mnt sebagai sasaran optimasi operasional.
 - **Breakdown Bulanan Dual Cycle vs Non Dual**: Grafik tren bulanan dilengkapi input **Target Optimal (%)** dan sakelar garis target yang diisolasi dengan `@st.fragment` (perubahan angka target tidak mereload halaman).

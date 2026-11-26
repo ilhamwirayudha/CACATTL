@@ -51,8 +51,8 @@ Seluruh logika perhitungan, kualifikasi pasangan, pembentukan ritase, visualisas
     $$\text{Gap} = \text{START\_TS\_DISC} - \text{END\_TS\_LOAD}$$
   - **Aturan Overlap di `layer2_dual` & `prepare_dual_cycle_table`**:
     Jika terjadi overlap (`gap_ab < 0` dan `gap_ba < 0`), hanya dikualifikasikan apabila $\text{overlap} = \min(|\text{gap}_{ab}|, |\text{gap}_{ba}|) \le 10.0\text{ menit}$ dan $\text{start\_diff} \le \text{ambang\_dual} + 60\text{ menit}$. Dengan aturan ini, anomali overlap lintas hari / puluhan jam tereliminasi dan masuk ke Non-Dual.
-    Pada tabel rincian (`prepare_dual_cycle_table`), nilai `Gap` untuk baris overlap menggunakan nilai riil overlap dari `layer2_dual` (`min(|gap_forward|, |gap_backward|)`), bukan dipaksa 0.0.
-  - Dikualifikasikan sebagai Dual Cycle apabila $\text{round}(\text{gap}, 1) \le \text{ambang\_dual}$ (default `30 menit`).
+    Pada tabel rincian (`prepare_dual_cycle_table`), nilai `Gap` untuk seluruh baris (baik normal maupun overlap) dihitung presisi hingga ke detik asli data (`min(|gap_forward|, |gap_backward|)` untuk overlap) tanpa pembulatan `.round(1)`.
+  - Dikualifikasikan sebagai Dual Cycle di `layer2_dual` apabila $\text{round}(\text{gap}, 1) \le \text{ambang\_dual}$ (default `30 menit`).
 
 ### 5. Perhitungan Durasi Non-Dual & Single (`prepare_non_dual_table` & `prepare_single_table` di `modules/ui.py`)
 - **Durasi Non-Dual**: $\text{END\_TS} - \text{START\_TS}$ (presisi ke detik, tanpa pembulatan desimal `.round(1)`).
@@ -82,12 +82,13 @@ Seluruh logika perhitungan, kualifikasi pasangan, pembentukan ritase, visualisas
     - Pada tabel Bukan Twinlift, pasangan Combo gagal Twinlift menampilkan rincian kontainer 1 dan kontainer 2 lengkap dengan masing-masing crane dan gap-nya, sedangkan kontainer Single (1x 20ft) menampilkan kontainer 1 dan crane 1, dengan kontainer 2, crane 2, waktu 2, dan gap berupa tanda strip (`-`).
   - **Teks Footer Tabel**: Keterangan footer `Menampilkan total ...` dihapus permanen dari seluruh tabel rincian modal.
 - **Deteksi & Highlight Baris Anomali Dual Cycle**:
+  - Pada tabel rincian (`prepare_dual_cycle_table`, `prepare_potential_dual_table`, dan `prepare_potential_combo_table`), nilai `Gap` dihitung presisi hingga ke detik asli data (tanpa pembulatan `.round(1)`).
   - Kolom **`Anomali`** pada modal Dual Cycle dikunci dengan rumus:
-    - `Anomali`: jika $\text{Gap} < 10.0\text{ menit}$ ($< \text{10m 00s}$).
-    - `Normal`: jika $\text{Gap} \ge 10.0\text{ menit}$ ($\ge \text{10m 00s}$).
+    - `Anomali`: jika $\text{Gap} < 1.0\text{ menit}$ ($< \text{01m 00s}$, yakni `00m 00s` s.d. `00m 59s`).
+    - `Normal`: jika $\text{Gap} \ge 1.0\text{ menit}$ ($\ge \text{01m 00s}$).
   - Baris dengan status `Anomali` diwarnai latar merah halus (`rgba(239, 68, 68, 0.22)`) dengan teks merah muda (`#fca5a5`).
   - Legenda baris merah diletakkan di **bawah tabel sebelah kanan**:  
-    `🔴 Baris Merah: Anomali (Gap < 10m 00s)`
+    `🔴 Baris Merah: Anomali (Gap < 01m 00s)`
 
 ### 8. Modal Pop-up Potensi Dual Cycle (`modules/ui.py` & `app.py`)
 - **Sumber Data & Kualifikasi**:
@@ -165,24 +166,23 @@ Seluruh logika perhitungan, kualifikasi pasangan, pembentukan ritase, visualisas
 
 ### 15. Logika Simulasi Potensi Efisiensi BBM & Finansial (`app.py` Tab Simulasi)
 - **Ground Truth 100% dari File Terupload**:
-  - `Baseline Ritase` diambil murni dari total event hasil analisis file (`act_total_ritase = total_dual + total_single`, misal `4.118 Rit`).
+  - `Baseline Ritase` diambil murni dari total event hasil analisis file (`act_total_ritase = total_dual + total_single`, misal `4.119 Rit`).
   - `Ritase Dual Cycle Aktual` = `2.062 Rit` (50,1%).
-  - `Ritase Non-Dual Aktual` = `2.056 Rit` (49,9%).
+  - `Ritase Non-Dual Aktual` = `2.057 Rit` (49,9%).
 - **Parameter Default Teruji**:
-  - Konsumsi BBM Truk: `1.75 Liter / Ritase` (slider kelipatan 0,05).
-  - Harga Solar Industri: `Rp 15.000 / Liter` (slider kelipatan 500).
-- **Rumus Efisiensi BBM & Finansial**:
-  - Setiap 1 ritase Dual Cycle menghemat 1 perjalanan truk kosong (menghemat `1 × BBM_per_rit` liter solar).
-  - **Total Solar Dihemat**: $\text{Ritase DC} \times \text{BBM\_per\_rit}$
-  - **Total BBM Terpakai**: $(\text{Total Ritase} - \text{Ritase DC}) \times \text{BBM\_per\_rit} = \text{Ritase Non-DC} \times \text{BBM\_per\_rit}$
-  - **Efisiensi Finansial (vs Aktual)**:
-    $$\Delta \text{Finansial} = (\text{Ritase DC}_{\text{skenario}} - \text{Ritase DC}_{\text{aktual}}) \times \text{BBM\_per\_rit} \times \text{Harga\_Solar}$$
+  - Konsumsi BBM Truk: `3,52 Liter / Ritase` (input kelipatan 0,05).
+  - Harga Solar Industri: `Rp 15.000 / Liter` (input kelipatan 500).
+- **Rumus Efisiensi BBM & Finansial (Basis Gerakan Truk: Non-Dual = 2x Gerakan, Dual Cycle = 1x Gerakan)**:
+  - **Biaya Full Non-Dual (Baseline Single Cycle Murni)**:
+    $$\text{Total BBM Baseline} = \text{Total Ritase} \times (\text{BBM\_per\_rit} \times 2)$$
+    $$\text{Biaya Full Non-Dual} = \text{Total BBM Baseline} \times \text{Harga\_Solar}$$
+  - **Simulasi Biaya BBM (Total BBM Operasional Terpakai)**:
+    $$\text{Total BBM Operasional} = (\text{Ritase Non-DC} \times \text{BBM\_per\_rit} \times 2) + (\text{Ritase DC} \times \text{BBM\_per\_rit})$$
+    $$\text{Simulasi Biaya BBM} = \text{Total BBM Operasional} \times \text{Harga\_Solar}$$
+  - **Potensi Penghematan Solar**:
+    $$\text{Solar Dihemat Total} = \text{Total BBM Baseline} - \text{Total BBM Operasional} = \text{Ritase DC} \times \text{BBM\_per\_rit}$$
 - **Slider Simulasi Adaptif Dinamis (`hitung_rentang_ambang_file`)**:
   - Mendeteksi persentil ke-5 (`p5`) dan persentil ke-95 (`p95`) dari rentang jeda waktu riil data yang terupload (dibulatkan ke kelipatan 5 menit, min 5 menit, max 240 menit).
-- **Tabel Sensitivitas Penetrasi**:
-  - Menampilkan rentang skenario seputar nilai riil dengan indikator:
-    - `📍 Kondisi Saat Ini`: Nilai acuan aktual dari file terupload (50,1%).
-    - `🎯 Target Skenario`: Nilai penetrasi yang dipilih pada slider simulasi.
 
 ### 16. Proteksi Modal Backdrop Click (`inject_modal_backdrop_protection` di `modules/ui.py`)
 - Mencegah modal pop-up tertutup secara tidak sengaja saat pengguna mengklik area luar (backdrop/overlay) dialog Streamlit.

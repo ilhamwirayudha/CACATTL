@@ -1546,10 +1546,14 @@ with st.container(border=True):
                 sim_ritase_dc = max(0, min(int(baseline_ritase), act_dual_count + delta_rit_vs_act))
                 sim_ritase_non_dc = int(baseline_ritase - sim_ritase_dc)
 
-        # Total Solar dihemat vs Single Cycle murni (karena tiap rit DC meniadakan 1 trip kosong)
-        total_bbm_baseline = baseline_ritase * bbm_per_rit
-        solar_dihemat_total = sim_ritase_dc * bbm_per_rit
-        total_bbm_operasional = max(0.0, total_bbm_baseline - solar_dihemat_total)
+        # 1. Full Non-Dual (Single Cycle Murni): Setiap 1 ritase membutuhkan 2x gerakan (berangkat muatan + balik kosong)
+        total_bbm_baseline = baseline_ritase * (bbm_per_rit * 2.0)
+
+        # 2. Simulasi BBM Operasional: (Ritase Non-Dual * 2x BBM) + (Ritase Dual Cycle * 1x BBM)
+        total_bbm_operasional = (sim_ritase_non_dc * bbm_per_rit * 2.0) + (sim_ritase_dc * bbm_per_rit)
+
+        # 3. Penghematan Solar vs Full Non-Dual (setiap 1 rit DC menghemat 1 gerakan kosong = 1x bbm_per_rit)
+        solar_dihemat_total = max(0.0, total_bbm_baseline - total_bbm_operasional)
         bbm_per_rit_efektif = (total_bbm_operasional / baseline_ritase) if baseline_ritase > 0 else 0.0
 
         # Tambahan Solar Dihemat & Finansial (dibandingkan kondisi aktual riil)
