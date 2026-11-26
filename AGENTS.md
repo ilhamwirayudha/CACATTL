@@ -192,3 +192,17 @@ Seluruh logika perhitungan, kualifikasi pasangan, pembentukan ritase, visualisas
 - Eksklusi permanen kolom internal kalkulasi dari tabel preview dan unduhan file Excel:
   `DUAL_PAIR_ID`, `DUAL_JENIS`, `DUAL_PASANGAN_EVENT_ID`, `DUAL_URUTAN`, `DUAL_GAP_LOKASI`, `DUAL_GAP_MENIT`, `DUAL_AMBANG_MENIT`, `DUAL_SELISIH_AMBANG_MENIT`, `DUAL_IS_FAST`, dan `TWINLIFT_GAP_MENIT`.
 - Menggunakan caching signature `_excel_bytes` dan `_excel_sig` agar berkas Excel hanya dibuat saat diminta pertama kali dan tidak memicu pembuatan ulang berulang kali.
+
+### 18. Tahap Data Loading & Preprocessing (`baca_file` di `modules/data_loader.py` & `siapkan_data` di `modules/calculations.py`)
+- **Validasi & Pembacaan File (`baca_file`)**:
+  - Hanya menerima format Excel modern (`.xlsx`) via `openpyxl` (`read_only=True, data_only=True`) guna menjamin integritas tipe data dan akurasi kalkulasi timestamp.
+  - Pembersihan header kolom dengan `.strip()` dan fallback `Col_{i}` untuk header kosong.
+- **Standardisasi & Pembersihan Data (`siapkan_data`, `vba_val`, `klasifikasi_activity`, `bersihkan_ves_id`)**:
+  - **Ukuran Kontainer (`CTR_SIZE`)**: Diparsing mengikuti perilaku `Val()` VBA (membaca angka dari awal string, mis. `'20FT'` $\rightarrow$ `20.0`).
+  - **Klasifikasi Aktivitas (`ACTIVITY`)**: String yang mengandung `"LOAD"` (case-insensitive) diklasifikasikan sebagai `"LOAD"`, selainnya sebagai `"DISC"`.
+  - **Normalisasi Identitas**: `VES_ID` kosong diisi `"(VES_ID Kosong)"`; `CTR_NO` kosong/tidak tersedia diisi `"-"`; `CRANE_ID` kosong diisi `"(Crane Kosong)"` dan jika tidak dipetakan diisi `"(Tidak Diketahui)"`.
+  - **Parsing & Fallback Timestamp (`TS_G` & `TS_H`)**: Diparsing dengan `pd.to_datetime(..., errors="coerce", format="mixed", dayfirst=True)`. Jika salah satu timestamp kosong, diisi dari pasangannya. Jika kedua timestamp kosong/tidak valid, baris **tetap diproses** menggunakan tanggal dummy `1899-12-29` mengikuti perilaku macro VBA (tidak dibuang agar total dan persentase tetap persis sama).
+- **Klasifikasi Dual Murni vs Campuran (`klasifikasi_dual_murni_campuran`)**:
+  - Memisahkan pasangan Dual Cycle ke dalam kategori *Dual Murni* (1 kapal sama) vs *Dual Campuran* (melibatkan kapal berbeda).
+- **Verifikasi Regression Test (`tests/test_locked_logic.py`)**:
+  - Setiap perubahan kode wajib lolos pengujian `python tests/test_locked_logic.py` (juga dijalankan otomatis oleh `.git/hooks/pre-commit`) untuk memastikan angka KPI patokan (*golden output*) tidak bergeser.
